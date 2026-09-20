@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AIusageBar
+Comment=Claude usage limits + API cost equivalent in the top bar
+Exec=/home/jaikhurana/Developer/AIusageBar/aiusagebar
+Terminal=false
+X-GNOME-Autostart-enabled=true
+Categories=Utility;
