@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"image"
 	"image/color"
@@ -311,6 +312,24 @@ func icon(percent int) []byte {
 }
 
 func main() {
+	serveAddr := flag.String("serve", "", "also serve usage JSON over HTTP at this address (e.g. :8765) for other devices on the LAN")
+	token := flag.String("token", "", "optional shared secret required by -serve clients (?token= or Authorization: Bearer)")
+	headless := flag.Bool("headless", false, "run the -serve bridge only, without a tray icon")
+	flag.Parse()
+
+	if *serveAddr != "" {
+		if *headless {
+			log.Fatal(serve(*serveAddr, *token))
+		}
+		go func() {
+			if err := serve(*serveAddr, *token); err != nil {
+				log.Printf("usage bridge stopped: %v", err)
+			}
+		}()
+	} else if *headless {
+		log.Fatal("-headless needs -serve, e.g. -headless -serve :8765")
+	}
+
 	systray.Run(onReady, onExit)
 }
 
