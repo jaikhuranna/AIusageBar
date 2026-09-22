@@ -19,8 +19,11 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/getlantern/systray"
@@ -311,18 +314,45 @@ func icon(percent int) []byte {
 	return buf.Bytes()
 }
 
+var (
+	mon       *monitor
+	serving   bool
+	stopMDNS  func()
+	pairingUI atomic.Bool
+)
+
 func main() {
-	serveAddr := flag.String("serve", "", "also serve usage JSON over HTTP at this address (e.g. :8765) for other devices on the LAN")
+	serveAddr := flag.String("serve", "", "also serve usage JSON over HTTP at this address (e.g. :8765) for the Wear OS app")
 	token := flag.String("token", "", "optional shared secret required by -serve clients (?token= or Authorization: Bearer)")
 	headless := flag.Bool("headless", false, "run the -serve bridge only, without a tray icon")
+	thresholds := flag.String("thresholds", defaultThreshold, "utilization percentages that raise an alert event, comma separated")
+	hysteresis := flag.Int("hysteresis", 5, "points a window must fall back below a threshold before that threshold can fire again")
+	mdns := flag.Bool("mdns", true, "advertise the bridge on the LAN as _aiusage._tcp so the watch can find it")
+	pair := flag.Bool("pair", false, "ask the bridge already running on this machine for a pairing code, print it, and exit")
 	flag.Parse()
 
+	if *pair {
+		if err := requestPairCode(*serveAddr); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	mon = newMonitor(parseThresholds(*thresholds), *hysteresis)
+	mon.onUpdate = func() { render(mon.latestRaw()) }
+
 	if *serveAddr != "" {
+		serving = true
+		if *mdns {
+			stopMDNS = advertise(*serveAddr, *token)
+		}
+		go catchSignals()
 		if *headless {
-			log.Fatal(serve(*serveAddr, *token))
+			go mon.run()
+			log.Fatal(serve(*serveAddr, *token, mon))
 		}
 		go func() {
-			if err := serve(*serveAddr, *token); err != nil {
+			if err := serve(*serveAddr, *token, mon); err != nil {
 				log.Printf("usage bridge stopped: %v", err)
 			}
 		}()
@@ -330,13 +360,33 @@ func main() {
 		log.Fatal("-headless needs -serve, e.g. -headless -serve :8765")
 	}
 
+	go mon.run()
 	systray.Run(onReady, onExit)
 }
+
+// catchSignals exists so the avahi advertisement doesn't outlive the process
+// and leave a service on the network that answers nothing.
+func catchSignals() {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	<-c
+	shutdown()
+	os.Exit(0)
+}
+
+func shutdown() {
+	if stopMDNS != nil {
+		stopMDNS()
+		stopMDNS = nil
+	}
+}
+
+const pairMenuTitle = "Pair a device\u2026"
 
 var (
 	mSession, mWeek                     *systray.MenuItem
 	mCostToday, mCostSession, mCostWeek *systray.MenuItem
-	mRefresh, mQuit                     *systray.MenuItem
+	mPair, mRefresh, mQuit              *systray.MenuItem
 )
 
 func onReady() {
@@ -355,22 +405,21 @@ func onReady() {
 	mCostWeek = systray.AddMenuItem("API-cost equivalent this week: ...", "")
 	mCostWeek.Disable()
 	systray.AddSeparator()
+	mPair = systray.AddMenuItem(pairMenuTitle, "Show a one-time code to pair a watch with this bridge")
 	mRefresh = systray.AddMenuItem("Refresh", "Refresh now")
 	mQuit = systray.AddMenuItem("Quit", "Quit AIusageBar")
 
-	refresh()
+	render(mon.latestRaw())
 	go loop()
 }
 
 func loop() {
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
 	for {
 		select {
-		case <-ticker.C:
-			refresh()
+		case <-mPair.ClickedCh:
+			go showPairCode()
 		case <-mRefresh.ClickedCh:
-			refresh()
+			go mon.poll()
 		case <-mQuit.ClickedCh:
 			systray.Quit()
 			return
@@ -378,9 +427,37 @@ func loop() {
 	}
 }
 
-func refresh() {
-	s := gather()
+// showPairCode puts a one-time pairing code in the menu and counts it down, so
+// the code can be read off the screen while typing it on the watch.
+func showPairCode() {
+	if !serving {
+		mPair.SetTitle(pairMenuTitle + " (needs -serve)")
+		return
+	}
+	if !pairingUI.CompareAndSwap(false, true) {
+		return // a code is already on screen
+	}
+	defer pairingUI.Store(false)
 
+	code := mon.newPairCode()
+	deadline := time.Now().Add(pairCodeTTL)
+	for {
+		left := int(time.Until(deadline).Seconds())
+		if left <= 0 {
+			break
+		}
+		mPair.SetTitle(fmt.Sprintf("Pairing code %s \u00b7 %ds", code, left))
+		time.Sleep(time.Second)
+	}
+	mPair.SetTitle(pairMenuTitle)
+}
+
+// render paints the tray from the monitor's cached sample. It is called from
+// the poll goroutine, and before the menu exists, so it tolerates nil items.
+func render(s snapshot) {
+	if mSession == nil {
+		return
+	}
 	fh, wk := "--", "--"
 	if s.fiveHour != nil {
 		fh = fmt.Sprintf("%d%%", s.fiveHour.Utilization)
@@ -388,7 +465,7 @@ func refresh() {
 	if s.sevenDay != nil {
 		wk = fmt.Sprintf("%d%%", s.sevenDay.Utilization)
 	}
-	systray.SetTitle(fmt.Sprintf("5h %s · 7d %s", fh, wk))
+	systray.SetTitle(fmt.Sprintf("5h %s \u00b7 7d %s", fh, wk))
 	systray.SetIcon(icon(maxPercent(s)))
 	systray.SetTooltip(fmt.Sprintf("Session %s | Week %s | Today's cost equiv %s", fh, wk, money(s.costToday)))
 
@@ -400,5 +477,6 @@ func refresh() {
 }
 
 func onExit() {
+	shutdown()
 	log.SetOutput(io.Discard)
 }

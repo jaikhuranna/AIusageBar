@@ -44,7 +44,8 @@ sudo apt install build-essential libgtk-3-dev libayatana-appindicator3-dev
 ## Serve usage over the LAN
 
 The same snapshot the tray shows can be served as JSON, so anything else on the
-network can read it:
+network can read it - that's how the Wear OS companion in `wearos/` gets its
+numbers:
 
 ```sh
 ./aiusagebar -serve :8765              # tray + JSON bridge
@@ -52,11 +53,23 @@ network can read it:
 ./aiusagebar -serve :8765 -token s3cr3t  # require a shared secret
 ```
 
-`GET /usage` returns the current snapshot as JSON. On startup the process
-logs every LAN address it is reachable on.
+On startup the process logs every LAN address it is reachable on, and advertises
+itself over mDNS as `_aiusage._tcp` (via `avahi-publish-service`) so a client can
+find it without anyone typing an IP address. `-mdns=false` turns that off.
+
+### Endpoints
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET /usage` | current snapshot. Sends an `ETag`; send it back as `If-None-Match` to get `304` when nothing has changed |
+| `GET /events?since=<id>` | alert events (threshold crossings, window resets) newer than `<id>`, plus the new `high_water` mark |
+| `POST /pair` `{"code":"123456"}` | redeems a pairing code for a per-device token |
+| `POST /pair/new` | mints a pairing code. Loopback only |
+| `GET /healthz` | liveness, no auth, no usage data. Says whether a token is needed |
 
 ```json
 {
+  "schema": 1,
   "five_hour": {"utilization": 53, "remaining": 47, "resets_at": "2026-09-21T18:20:00Z", "resets_in_sec": 16631},
   "seven_day": {"utilization": 41, "remaining": 59, "resets_at": "2026-09-27T00:00:00Z", "resets_in_sec": 469031},
   "cost_today": 251.02, "cost_session": 25.06, "cost_week": 351.44,
@@ -64,8 +77,48 @@ logs every LAN address it is reachable on.
 }
 ```
 
+The `ETag` deliberately ignores `generated_at` and `resets_in_sec`: they change
+on every poll but carry no news, and a `304` over a Bluetooth proxy is nearly
+free next to a full body. A `304` means "your copy is still current *now*", so
+treat the fetch time, not `generated_at`, as the freshness clock.
+
+### Alerts
+
+The bridge is the only thing that decides an alert; clients just render what
+they're told. Crossing 80% or 95% on either window raises an event, and so does
+a window resetting. One crossing produces exactly one event: it re-arms only
+when the window rolls over or utilization falls `-hysteresis` points back below
+the line, and the arming state is persisted, so restarting the bridge doesn't
+replay history.
+
+```sh
+./aiusagebar -serve :8765 -thresholds 80,95 -hysteresis 5
+```
+
+Cost is deliberately not alertable - it's an independent estimate of value, not
+a bill, and a "you've spent $X" notification would imply a charge that isn't
+happening.
+
+### Pairing a device
+
+Typing a 32-character token on a watch is not a plan. Instead:
+
+```sh
+./aiusagebar -pair          # asks the running bridge for a code, prints it
+```
+
+(or click **Pair a device…** in the tray menu). The bridge prints a 6-digit
+code, good for one use and two minutes; the device posts it to `/pair` and gets
+back its own token. **Pairing one device closes the bridge**: once any device is
+paired, unauthenticated requests get a `401`, and each device's token can be
+revoked on its own by deleting it from the state file.
+
+State - device tokens, the event ring, alert arming - lives in
+`$XDG_STATE_HOME/aiusagebar/state.json` (mode 0600), usually
+`~/.local/state/aiusagebar/state.json`.
+
 The bridge is plain HTTP with no transport security. Bind it to a trusted
-network, and use `-token` if that network has guests on it.
+network. Anything that widens its reach past the LAN needs TLS first.
 
 ## Start on login
 
