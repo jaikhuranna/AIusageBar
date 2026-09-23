@@ -7,9 +7,10 @@ Make Claude Code usage visible at a glance, wherever you are.
 AIusageBar is a GNOME top-bar tray indicator (Go) that reads Anthropic's own
 cached plan-limit data and shows how much of the session (5h) and weekly (7d)
 allowance is gone, when each resets, and what the same token usage would have
-cost on pay-as-you-go API pricing. It also serves that snapshot as JSON over the
-LAN so other devices - a Wear OS companion - can show the same numbers, and
-raises alert events when a limit is about to bite.
+cost on pay-as-you-go API pricing. It also serves that snapshot as JSON — on the
+LAN, or from anywhere through a Cloudflare Tunnel — with pairing and alert
+events when a limit is about to bite. That bridge is the only data source for
+the Wear OS companion (`../AIusageWear`, design rev 3).
 
 The point is answering "can I start this long task right now?" without opening a
 terminal.
@@ -22,16 +23,20 @@ terminal.
   snapshot, evaluates alert thresholds, mints pairing codes. Tray and HTTP
   handlers read its cache; nothing else calls `gather()`.
 - `server.go` — the `-serve` bridge: `/usage` (with ETag), `/events`, `/pair`,
-  `/healthz`. Wire contract v1, spelled out in `wearos/DESIGN.md` §7.
+  `/healthz`. The wire contract is the **Endpoints** table in `README.md`.
+- `control.go` — the Unix control socket, the only place pairing codes are
+  minted (see gotchas).
 - `state.go` — what survives a restart: device tokens, the event ring, and the
   per-threshold arming state, in `$XDG_STATE_HOME/aiusagebar/state.json` (0600).
 - `mdns.go` — `_aiusage._tcp` advertisement, shelled out to
   `avahi-publish-service`.
 - `pair.go` — the `-pair` client that asks the running bridge for a code.
 - `monitor_test.go` — the alert state machine (fire once, hysteresis, re-arm on
-  window reset, survive restart) and the pairing rules. `go test ./...`.
-- `wearos/DESIGN.md` — architecture + staged plan for the Wear OS companion.
-  **M0 (the bridge contract) is done; no Android code exists yet.**
+  window reset, survive restart) and the pairing rules.
+- `bridge_test.go` — the HTTP/socket security rules: no minting over TCP,
+  `-public-url` closes an unpaired bridge. `go test ./...`.
+- `scripts/setup-tunnel.sh` — one-shot Cloudflare Tunnel setup: its own
+  `~/.cloudflared/aiusage.yml`, a user systemd unit, autostart flags.
 - `aiusagebar.desktop` — autostart entry.
 
 ## Build and run
@@ -41,6 +46,7 @@ go build -o aiusagebar .          # needs Go 1.22+, gcc, GTK + AppIndicator head
 ./aiusagebar                      # tray only
 ./aiusagebar -serve :8765         # tray + LAN JSON bridge
 ./aiusagebar -headless -serve :8765 -token s3cr3t
+./aiusagebar -serve :8765 -public-url https://usage.example.com   # behind a tunnel
 ./aiusagebar -pair                # print a pairing code for a watch
 go test ./...                     # no GTK needed
 ```
@@ -51,10 +57,13 @@ go test ./...                     # no GTK needed
   the transcript files; they belong to Claude Code.
 - **The cost figure is an estimate of value, not a bill.** Subscription plans
   expose no dollar amount. Don't let UI (or an alert) imply a charge.
-- **The bridge is plain HTTP with no transport security**, bound to all
-  interfaces. It is LAN-only by design. Anything that widens its reach needs TLS
-  first — see `wearos/DESIGN.md` §7.
-- **The bridge is the only writer of alert events** (`wearos/DESIGN.md` D4).
+- **The bridge is plain HTTP with no transport security.** Off the LAN it is
+  reached only through a TLS tunnel (Cloudflare), set up per `README.md`, with
+  `-public-url` so nothing is readable before a device pairs.
+- **Never trust "came from loopback".** A tunnel or reverse proxy on this
+  machine makes internet traffic arrive from `127.0.0.1`. Anything privileged
+  (minting pairing codes) goes over the Unix control socket, never a TCP route.
+- **The bridge is the only writer of alert events.**
   Watch and phone render events; they never derive them. Keep threshold logic
   and hysteresis in `evaluateLocked` and nowhere else, or one crossing turns
   into two notifications that disagree.

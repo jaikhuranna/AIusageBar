@@ -1,6 +1,7 @@
 // HTTP bridge: exposes the usage snapshot, the alert event ring and device
-// pairing, so other devices on the LAN (the Wear OS app in wearos/) can read
-// the same numbers the tray shows. Wire contract v1: wearos/DESIGN.md §7.
+// pairing, so other devices (the Wear OS app in ../AIusageWear) can read the
+// same numbers the tray shows, on the LAN or through a tunnel. The wire
+// contract is the "Endpoints" table in README.md.
 package main
 
 import (
@@ -70,6 +71,27 @@ func wireOf(s snapshot) wireSnapshot {
 // serve runs the JSON bridge until the process exits. token, when non-empty, is
 // a shared secret; per-device tokens handed out by /pair are always accepted.
 func serve(addr, token string, m *monitor) error {
+	log.Printf("serving usage JSON on http://%s/usage", addr)
+	if listensEverywhere(addr) {
+		for _, ip := range localIPs() {
+			log.Printf("  reachable at http://%s%s/usage", ip, portOf(addr))
+		}
+	}
+	if m.publicURL != "" {
+		log.Printf("  and publicly at %s/usage (auth required on every request)", m.publicURL)
+	}
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      newMux(token, m),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 30 * time.Second,
+	}
+	return srv.ListenAndServe()
+}
+
+// newMux holds every TCP route. Minting pairing codes is deliberately absent:
+// see control.go.
+func newMux(token string, m *monitor) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	usage := func(w http.ResponseWriter, r *http.Request) {
@@ -112,22 +134,6 @@ func serve(addr, token string, m *monitor) error {
 		})
 	})
 
-	// /pair/new mints a code. It is loopback-only and unauthenticated: standing
-	// at the desktop is the proof of intent.
-	mux.HandleFunc("/pair/new", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-		if !fromLoopback(r) {
-			http.Error(w, "pair codes can only be minted on the host itself", http.StatusForbidden)
-			return
-		}
-		code := m.newPairCode()
-		log.Printf("pairing code %s (valid %s)", code, pairCodeTTL)
-		writeJSON(w, map[string]any{"code": code, "expires_in_sec": int(pairCodeTTL.Seconds())})
-	})
-
 	mux.HandleFunc("/pair", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -146,7 +152,13 @@ func serve(addr, token string, m *monitor) error {
 			http.Error(w, "bad or expired pairing code", http.StatusForbidden)
 			return
 		}
-		writeJSON(w, map[string]any{"token": d.Token, "device_id": d.ID, "host": hostname()})
+		resp := map[string]any{"token": d.Token, "device_id": d.ID, "host": hostname()}
+		// A device pairing over the LAN learns where to reach the bridge from
+		// anywhere, so nobody types a hostname on a watch.
+		if m.publicURL != "" {
+			resp["public_url"] = m.publicURL
+		}
+		writeJSON(w, resp)
 	})
 
 	// /healthz is unauthenticated and carries no usage data, so a client can
@@ -165,17 +177,7 @@ func serve(addr, token string, m *monitor) error {
 		})
 	})
 
-	log.Printf("serving usage JSON on http://%s/usage", addr)
-	for _, ip := range localIPs() {
-		log.Printf("  reachable at http://%s%s/usage", ip, portOf(addr))
-	}
-	srv := &http.Server{
-		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-	}
-	return srv.ListenAndServe()
+	return mux
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -239,18 +241,20 @@ func authorized(r *http.Request, shared string, m *monitor) bool {
 	return m.tokenOK(shared, strings.TrimPrefix(auth, "Bearer "))
 }
 
-func fromLoopback(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
 func hostname() string {
 	h, _ := os.Hostname()
 	return h
+}
+
+// listensEverywhere is true for ":8765", "0.0.0.0:8765" and "[::]:8765", the
+// binds where every LAN address really does reach the bridge.
+func listensEverywhere(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return host == "" || (ip != nil && ip.IsUnspecified())
 }
 
 func portOf(addr string) string {

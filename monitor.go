@@ -2,8 +2,8 @@
 // the wire snapshot, and evaluates alert thresholds; the tray and every HTTP
 // handler read that cache instead of re-scanning the transcripts themselves.
 //
-// It is also the single writer of alert events (wearos/DESIGN.md D4): clients
-// render events, they never derive them.
+// It is also the single writer of alert events: clients render events, they
+// never derive them.
 package main
 
 import (
@@ -23,8 +23,8 @@ import (
 
 const (
 	pairCodeTTL      = 2 * time.Minute
-	maxPairFailures  = 10 // wrong codes before every pending code is burned
-	defaultThreshold = "80,95"
+	maxPairFailures  = 10          // wrong codes before every pending code is burned
+	defaultThreshold = "80,95,100" // 100 = the window is exhausted
 )
 
 type monitor struct {
@@ -39,6 +39,10 @@ type monitor struct {
 
 	pending  map[string]time.Time // pairing code -> expiry
 	failures int
+
+	// publicURL is where a tunnel serves this bridge. Set means reachable from
+	// the internet, so every request needs a credential, paired or not.
+	publicURL string
 
 	onUpdate func() // optional: tray refresh, called outside the lock
 	started  time.Time
@@ -277,9 +281,10 @@ func (m *monitor) tokenOK(shared, tok string) bool {
 }
 
 // authRequired is true once there is any credential to check: a shared secret,
-// or at least one paired device. Pairing a watch closes the bridge.
+// or at least one paired device. Pairing a watch closes the bridge. A public
+// bridge is closed from the start.
 func (m *monitor) authRequired(shared string) bool {
-	if shared != "" {
+	if shared != "" || m.publicURL != "" {
 		return true
 	}
 	m.mu.Lock()

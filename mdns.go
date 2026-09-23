@@ -1,5 +1,5 @@
 // mDNS/DNS-SD advertisement, so the watch can find the bridge without anyone
-// typing an IP address on a 1.2" screen (wearos/DESIGN.md §5).
+// typing an IP address on a 1.2" screen.
 //
 // This shells out to avahi-publish-service rather than pulling in a zeroconf
 // library: the target is a Linux desktop that already runs avahi-daemon, and a
@@ -10,6 +10,7 @@ package main
 
 import (
 	"log"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -18,10 +19,16 @@ import (
 const mdnsService = "_aiusage._tcp"
 
 // advertise publishes the bridge until the returned stop func is called.
-// The auth TXT record reflects the shared-secret flag only; whether a client
+// The auth TXT record reflects the startup flags only; whether a client
 // actually needs a token can change at runtime (pairing closes the bridge), so
 // clients confirm with GET /healthz rather than trusting this record.
-func advertise(addr, sharedToken string) (stop func()) {
+func advertise(addr string, tokenRequired bool) (stop func()) {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
+			log.Printf("mdns: bound to loopback, nothing on the LAN could reach it; not advertising")
+			return func() {}
+		}
+	}
 	port := strings.TrimPrefix(portOf(addr), ":")
 	if _, err := strconv.Atoi(port); err != nil {
 		log.Printf("mdns: can't work out a port from %q, not advertising", addr)
@@ -33,7 +40,7 @@ func advertise(addr, sharedToken string) (stop func()) {
 		return func() {}
 	}
 	auth := "none"
-	if sharedToken != "" {
+	if tokenRequired {
 		auth = "token"
 	}
 	name := "AIusageBar on " + hostname()

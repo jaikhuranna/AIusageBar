@@ -315,10 +315,11 @@ func icon(percent int) []byte {
 }
 
 var (
-	mon       *monitor
-	serving   bool
-	stopMDNS  func()
-	pairingUI atomic.Bool
+	mon         *monitor
+	serving     bool
+	stopMDNS    func()
+	stopControl func()
+	pairingUI   atomic.Bool
 )
 
 func main() {
@@ -329,7 +330,13 @@ func main() {
 	hysteresis := flag.Int("hysteresis", 5, "points a window must fall back below a threshold before that threshold can fire again")
 	mdns := flag.Bool("mdns", true, "advertise the bridge on the LAN as _aiusage._tcp so the watch can find it")
 	pair := flag.Bool("pair", false, "ask the bridge already running on this machine for a pairing code, print it, and exit")
+	publicURL := flag.String("public-url", "", "https URL a tunnel (e.g. Cloudflare) serves this bridge at; requires auth on every request and is handed to devices when they pair")
 	flag.Parse()
+
+	*publicURL = strings.TrimRight(*publicURL, "/")
+	if *publicURL != "" && !strings.HasPrefix(*publicURL, "https://") {
+		log.Fatal("-public-url must be https:// - tokens cross the internet on it")
+	}
 
 	if *pair {
 		if err := requestPairCode(*serveAddr); err != nil {
@@ -339,12 +346,18 @@ func main() {
 	}
 
 	mon = newMonitor(parseThresholds(*thresholds), *hysteresis)
+	mon.publicURL = *publicURL
 	mon.onUpdate = func() { render(mon.latestRaw()) }
 
 	if *serveAddr != "" {
 		serving = true
 		if *mdns {
-			stopMDNS = advertise(*serveAddr, *token)
+			stopMDNS = advertise(*serveAddr, *token != "" || *publicURL != "")
+		}
+		if stop, err := serveControl(mon); err != nil {
+			log.Printf("pairing unavailable: %v", err)
+		} else {
+			stopControl = stop
 		}
 		go catchSignals()
 		if *headless {
@@ -364,8 +377,8 @@ func main() {
 	systray.Run(onReady, onExit)
 }
 
-// catchSignals exists so the avahi advertisement doesn't outlive the process
-// and leave a service on the network that answers nothing.
+// catchSignals exists so the avahi advertisement and the control socket don't
+// outlive the process.
 func catchSignals() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
@@ -378,6 +391,10 @@ func shutdown() {
 	if stopMDNS != nil {
 		stopMDNS()
 		stopMDNS = nil
+	}
+	if stopControl != nil {
+		stopControl()
+		stopControl = nil
 	}
 }
 
