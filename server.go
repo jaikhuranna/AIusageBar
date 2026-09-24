@@ -31,7 +31,10 @@ type wireSnapshot struct {
 	CostSession float64     `json:"cost_session"`
 	CostWeek    float64     `json:"cost_week"`
 	GeneratedAt string      `json:"generated_at"`
-	Host        string      `json:"host"`
+	// CacheFetchedAt is when Claude Code last fetched these limits: the real
+	// age of the numbers, as opposed to when the bridge re-read them.
+	CacheFetchedAt string `json:"cache_fetched_at,omitempty"`
+	Host           string `json:"host"`
 }
 
 func toWire(w *limitWindow) *wireWindow {
@@ -56,15 +59,20 @@ func toWire(w *limitWindow) *wireWindow {
 
 func wireOf(s snapshot) wireSnapshot {
 	host, _ := os.Hostname()
+	fetched := ""
+	if !s.cacheFetchedAt.IsZero() {
+		fetched = s.cacheFetchedAt.UTC().Format(time.RFC3339)
+	}
 	return wireSnapshot{
-		Schema:      schemaVersion,
-		FiveHour:    toWire(s.fiveHour),
-		SevenDay:    toWire(s.sevenDay),
-		CostToday:   s.costToday,
-		CostSession: s.costSession,
-		CostWeek:    s.costWeek,
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		Host:        host,
+		CacheFetchedAt: fetched,
+		Schema:         schemaVersion,
+		FiveHour:       toWire(s.fiveHour),
+		SevenDay:       toWire(s.sevenDay),
+		CostToday:      s.costToday,
+		CostSession:    s.costSession,
+		CostWeek:       s.costWeek,
+		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
+		Host:           host,
 	}
 }
 
@@ -99,6 +107,10 @@ func newMux(token string, m *monitor) *http.ServeMux {
 			unauthorized(w)
 			return
 		}
+		// Asking is refreshing: a stale cache gets refreshed before we answer,
+		// so a client's pull-to-refresh and its background poll both get
+		// current numbers, and none of them needs a separate endpoint.
+		m.freshen()
 		snap, etag := m.latest()
 		w.Header().Set("ETag", etag)
 		w.Header().Set("Cache-Control", "no-cache")

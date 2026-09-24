@@ -12,7 +12,13 @@ GNOME top-bar indicator for [Claude Code](https://claude.com/claude-code) usage.
   - **API-cost equivalent** for today / this session / this week - what the
     same token usage would have cost on pay-as-you-go API pricing, computed
     from the token counts logged in `~/.claude/projects/**/*.jsonl` using
-    current per-model Anthropic pricing (updated 2026-06).
+    current per-model Anthropic pricing (updated 2026-09). Each reply is
+    counted once: Claude Code writes a transcript line per content block, all
+    repeating the reply's usage, so lines are deduplicated by message id +
+    request id. Cache reads use each model's own rate (Opus 5.5 and Fable 5.1
+    aren't the usual 0.1x), and 1-hour cache writes are 2x input. T3 Code
+    prices every cache write at the 5-minute 1.25x rate, so it shows a little
+    less for the same usage.
 - Refreshes every 30s, or on demand via the "Refresh" menu item.
 - Can also serve the same numbers over your LAN (`-serve`) as JSON, for other
   devices on the network.
@@ -61,7 +67,7 @@ find it without anyone typing an IP address. `-mdns=false` turns that off.
 
 | Endpoint | What it does |
 | --- | --- |
-| `GET /usage` | current snapshot. Sends an `ETag`; send it back as `If-None-Match` to get `304` when nothing has changed |
+| `GET /usage` | current snapshot, refreshed first if it's stale (see **Freshness**). Sends an `ETag`; send it back as `If-None-Match` to get `304` when nothing has changed |
 | `GET /events?since=<id>` | alert events (threshold crossings, window resets) newer than `<id>`, plus the new `high_water` mark |
 | `POST /pair` `{"code":"123456"}` | redeems a pairing code for a per-device token (plus `public_url`, if set) |
 | `GET /healthz` | liveness, no auth, no usage data. Says whether a token is needed |
@@ -72,7 +78,7 @@ find it without anyone typing an IP address. `-mdns=false` turns that off.
   "five_hour": {"utilization": 53, "remaining": 47, "resets_at": "2026-09-21T18:20:00Z", "resets_in_sec": 16631},
   "seven_day": {"utilization": 41, "remaining": 59, "resets_at": "2026-09-27T00:00:00Z", "resets_in_sec": 469031},
   "cost_today": 251.02, "cost_session": 25.06, "cost_week": 351.44,
-  "generated_at": "2026-09-21T13:43:29Z", "host": "pop-os"
+  "generated_at": "2026-09-21T13:43:29Z", "cache_fetched_at": "2026-09-21T13:43:12Z", "host": "pop-os"
 }
 ```
 
@@ -80,6 +86,30 @@ The `ETag` deliberately ignores `generated_at` and `resets_in_sec`: they change
 on every poll but carry no news, and a `304` over a Bluetooth proxy is nearly
 free next to a full body. A `304` means "your copy is still current *now*", so
 treat the fetch time, not `generated_at`, as the freshness clock.
+
+### Freshness
+
+The limits come from Claude Code's cache in `~/.claude.json`, which only moves
+when Claude Code fetches usage, normally during a session. So asking is
+refreshing: when a client calls `GET /usage` and that cache is more than a
+minute old, the bridge first runs the official CLI's local `/usage` command
+(`claude -p /usage`; no model call, a couple of seconds), which makes Claude
+Code fetch current numbers, and then answers. That's at most one CLI run a
+minute however many clients ask, and concurrent requests share it. A client's
+refresh button and its background poll are the same request; there's no
+separate refresh endpoint.
+
+`cache_fetched_at` is when Claude Code last fetched the limits, so the true age
+of the numbers. The bridge never talks to Anthropic itself.
+
+```sh
+./aiusagebar -serve :8765 -refresh-min-age 5m     # refresh less eagerly
+./aiusagebar -serve :8765 -refresh-min-age 0      # never; serve the cache as Claude Code leaves it
+./aiusagebar -serve :8765 -claude /opt/bin/claude # if claude isn't on PATH or in ~/.local/bin
+```
+
+`resets_at` is rounded to the minute: Anthropic's value wobbles by a second
+between fetches, which would otherwise look like the window rolling over.
 
 ### Alerts
 
@@ -126,7 +156,28 @@ State - device tokens, the event ring, alert arming - lives in
 The bridge itself is plain HTTP with no transport security. On the LAN, keep it
 to a trusted network. To reach it from anywhere, put TLS in front with a tunnel:
 
-## Reach it from anywhere (Cloudflare Tunnel)
+## Reach it from anywhere
+
+Either tunnel works; the bridge doesn't care which one is in front of it. Run it
+with `-public-url` set to the tunnel's address either way.
+
+### Tailscale Funnel (no domain needed)
+
+Free, with a stable `https://<machine>.<tailnet>.ts.net` address and TLS
+included. Funnel exposes only the port you give it, not the rest of the machine
+or your tailnet, and clients don't need Tailscale installed.
+
+```sh
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+sudo tailscale funnel --bg 8765      # prints the public URL; persists across reboots
+./aiusagebar -serve :8765 -public-url https://<machine>.<tailnet>.ts.net
+```
+
+`sudo tailscale funnel reset` turns it off. Funnel forwards every path, which
+is fine: `/pair/new` doesn't exist on TCP, and everything else needs a token.
+
+### Cloudflare Tunnel (needs a domain)
 
 A [Cloudflare named tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
 gives the bridge a stable `https://` hostname without opening a port on your
@@ -187,6 +238,46 @@ pairing through the public URL.
 
 `cloudflared service install` runs the tunnel at boot (see Cloudflare's docs; it
 reads `/etc/cloudflared/config.yml`).
+
+### Don't rely on an unguessable hostname
+
+Every HTTPS certificate is published in Certificate Transparency logs, and
+scanners watch them, so a public hostname is found within minutes however
+random it is. The token is what protects the bridge. It's invisible in use,
+because a client pairs once and sends the token from then on.
+
+## Writing another client
+
+Anything can read the bridge, not just the watch. Here's the whole integration:
+
+1. **Find it.** On the LAN, browse mDNS for `_aiusage._tcp`, or use the
+   host's address on port 8765. From anywhere, use the public URL.
+2. **Pair once.** Run `aiusagebar -pair` (or use **Pair a device…** in the tray)
+   to get a 6-digit code, then:
+   ```sh
+   curl -X POST https://<public-url>/pair -d '{"code":"123456","name":"my-thing"}'
+   # → {"token":"…","device_id":"…","host":"pop-os","public_url":"https://…"}
+   ```
+   Store the token. If you paired on the LAN, switch to `public_url` for later
+   requests.
+3. **Read.** Send `Authorization: Bearer <token>` on every request, never
+   `?token=`. Poll `GET /usage` with `If-None-Match: <last ETag>`: a `304`
+   means nothing changed. For notifications, poll `GET /events?since=<high_water>`
+   and deduplicate by `dedupe_key`. The bridge is the only thing that decides
+   an alert, so don't re-derive thresholds in your client.
+4. **Handle** `401` as "pair again"; your device was revoked or the state was
+   reset. Use `GET /healthz` (no auth) to check the bridge is up.
+
+Rules of thumb:
+- Date your data from when you fetched it, not from `generated_at`; or
+  better, from `cache_fetched_at` when it's there.
+- Don't add a refresh button that does anything but `GET /usage`: that
+  request already refreshes.
+- Take reset times only from `resets_at`.
+- Never label the cost numbers as a bill.
+
+Each client gets its own token. Revoke one by deleting its entry from
+`state.json` and restarting the bridge.
 
 ## Start on login
 

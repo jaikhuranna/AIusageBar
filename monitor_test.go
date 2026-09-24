@@ -229,3 +229,23 @@ func TestParseThresholds(t *testing.T) {
 		}
 	}
 }
+
+func TestResetJitterIsNotARollover(t *testing.T) {
+	m := newTestMonitor(t)
+	// Real values seen from Anthropic for one window, fetched minutes apart.
+	jitter := []string{"2026-09-24T12:39:59.912Z", "2026-09-24T12:40:00.316843+00:00", "2026-09-24T12:39:59.5Z"}
+	var all []event
+	for _, r := range jitter {
+		all = append(all, evaluate(m, snapshot{fiveHour: &limitWindow{Utilization: 96, ResetsAt: r}})...)
+	}
+	kinds := map[string]int{}
+	for _, e := range all {
+		kinds[e.Kind]++
+	}
+	if kinds["window_reset"] != 0 {
+		t.Fatalf("second-level jitter in resets_at fired %d window_reset events", kinds["window_reset"])
+	}
+	if kinds["threshold_crossed"] != 2 { // 80 and 95, once each
+		t.Fatalf("got %d threshold events, want 2 (80, 95) exactly once", kinds["threshold_crossed"])
+	}
+}

@@ -33,32 +33,39 @@ const pollInterval = 30 * time.Second
 
 // ---------- pricing ----------
 
-type price struct{ in, out float64 } // dollars per token
+// price is dollars per token. Cache reads are usually 0.1x input, but not for
+// every model (Opus 5.5 is 0.05x, Fable 5.1 0.025x), so each model says.
+type price struct{ in, out, read float64 }
 
-// Cache multipliers are Anthropic's standard formula, applied on top of a
-// model's base input price: 5m cache write = 1.25x, 1h cache write = 2x,
-// cache read = 0.1x.
+// Cache writes follow Anthropic's standard multipliers on the input price:
+// 5-minute = 1.25x, 1-hour = 2x.
 const (
 	cacheWrite5m = 1.25
 	cacheWrite1h = 2.0
-	cacheRead    = 0.1
 )
 
+// mtok builds a price from $/million-token figures.
+func mtok(in, out, read float64) price { return price{in / 1e6, out / 1e6, read / 1e6} }
+
+// priceFor maps a model id to its rate. More specific names come first:
+// "opus-5-5" must not fall through to "opus".
 func priceFor(model string) price {
 	m := strings.ToLower(model)
 	switch {
 	case strings.Contains(m, "haiku"):
-		return price{1.00 / 1e6, 5.00 / 1e6}
+		return mtok(1, 5, 0.10)
+	case strings.Contains(m, "opus-5-5"), strings.Contains(m, "opus-5.5"):
+		return mtok(4, 20, 0.20)
 	case strings.Contains(m, "opus"):
-		return price{5.00 / 1e6, 25.00 / 1e6}
+		return mtok(5, 25, 0.50)
+	case strings.Contains(m, "fable-5-1"), strings.Contains(m, "fable-5.1"):
+		return mtok(10, 50, 0.25)
 	case strings.Contains(m, "fable"), strings.Contains(m, "mythos"):
-		return price{10.00 / 1e6, 50.00 / 1e6}
+		return mtok(10, 50, 1.00)
 	case strings.Contains(m, "sonnet-5"), strings.Contains(m, "sonnet5"):
-		return price{2.00 / 1e6, 10.00 / 1e6}
-	case strings.Contains(m, "sonnet"):
-		return price{3.00 / 1e6, 15.00 / 1e6}
-	default:
-		return price{3.00 / 1e6, 15.00 / 1e6}
+		return mtok(2, 10, 0.20)
+	default: // older Sonnets and anything unknown
+		return mtok(3, 15, 0.30)
 	}
 }
 
@@ -77,11 +84,16 @@ func (w *limitWindow) resetTime() time.Time {
 	if err != nil {
 		return time.Time{}
 	}
-	return t
+	// Anthropic's resets_at wobbles by a second across fetches (12:39:59.9,
+	// then 12:40:00.3). Unrounded, each wobble reads as the window rolling
+	// over, which re-arms and re-fires every alert. Real resets are on the
+	// minute and move by hours, so the nearest minute is the true value.
+	return t.Round(time.Minute)
 }
 
 type claudeConfig struct {
 	CachedUsageUtilization struct {
+		FetchedAtMs int64 `json:"fetchedAtMs"` // when Claude Code last fetched usage
 		Utilization struct {
 			FiveHour *limitWindow `json:"five_hour"`
 			SevenDay *limitWindow `json:"seven_day"`
@@ -89,20 +101,35 @@ type claudeConfig struct {
 	} `json:"cachedUsageUtilization"`
 }
 
-func loadLimits() (fiveHour, sevenDay *limitWindow) {
+func readClaudeConfig() (claudeConfig, bool) {
+	var cfg claudeConfig
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, nil
+		return cfg, false
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".claude.json"))
 	if err != nil {
-		return nil, nil
+		return cfg, false
 	}
-	var cfg claudeConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, nil
+	return cfg, json.Unmarshal(data, &cfg) == nil
+}
+
+func loadLimits() (fiveHour, sevenDay *limitWindow, fetchedAt time.Time) {
+	cfg, ok := readClaudeConfig()
+	if !ok {
+		return nil, nil, time.Time{}
 	}
-	return cfg.CachedUsageUtilization.Utilization.FiveHour, cfg.CachedUsageUtilization.Utilization.SevenDay
+	c := cfg.CachedUsageUtilization
+	if c.FetchedAtMs > 0 {
+		fetchedAt = time.UnixMilli(c.FetchedAtMs)
+	}
+	return c.Utilization.FiveHour, c.Utilization.SevenDay, fetchedAt
+}
+
+// loadCacheFetchedAt is when Claude Code last fetched usage, zero if unknown.
+func loadCacheFetchedAt() time.Time {
+	_, _, t := loadLimits()
+	return t
 }
 
 // ---------- ~/.claude/projects/**/*.jsonl: token usage -> $ equivalent ----------
@@ -121,7 +148,9 @@ type usage struct {
 type transcriptEntry struct {
 	Type      string `json:"type"`
 	Timestamp string `json:"timestamp"`
+	RequestID string `json:"requestId"`
 	Message   *struct {
+		ID    string `json:"id"`
 		Model string `json:"model"`
 		Usage *usage `json:"usage"`
 	} `json:"message"`
@@ -132,7 +161,7 @@ func costOf(u *usage, p price) float64 {
 		return 0
 	}
 	cost := float64(u.InputTokens)*p.in + float64(u.OutputTokens)*p.out
-	cost += float64(u.CacheReadInputTokens) * p.in * cacheRead
+	cost += float64(u.CacheReadInputTokens) * p.read
 	if u.CacheCreation != nil {
 		cost += float64(u.CacheCreation.Ephemeral5m) * p.in * cacheWrite5m
 		cost += float64(u.CacheCreation.Ephemeral1h) * p.in * cacheWrite1h
@@ -144,8 +173,14 @@ func costOf(u *usage, p price) float64 {
 
 // costSince scans every project transcript and returns the total $ equivalent
 // of assistant-message token usage at or after each of the given start times.
+//
+// Claude Code writes one transcript line per content block of a reply, each
+// repeating the whole reply's usage, and resumed sessions copy old lines into
+// new files. So a reply is counted once, by message id + request id, across
+// every file (the same key T3 and ccusage use).
 func costSince(starts []time.Time) []float64 {
 	totals := make([]float64, len(starts))
+	seen := map[string]bool{}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return totals
@@ -165,13 +200,13 @@ func costSince(starts []time.Time) []float64 {
 		if info, err := d.Info(); err == nil && info.ModTime().Before(earliest) {
 			return nil // file hasn't been touched since our oldest window started
 		}
-		scanFile(path, starts, totals)
+		scanFile(path, starts, totals, seen)
 		return nil
 	})
 	return totals
 }
 
-func scanFile(path string, starts []time.Time, totals []float64) {
+func scanFile(path string, starts []time.Time, totals []float64, seen map[string]bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -182,7 +217,7 @@ func scanFile(path string, starts []time.Time, totals []float64) {
 	for {
 		line, err := r.ReadString('\n')
 		if len(line) > 0 {
-			applyLine(line, starts, totals)
+			applyLine(line, starts, totals, seen)
 		}
 		if err != nil {
 			if err != io.EOF {
@@ -193,7 +228,7 @@ func scanFile(path string, starts []time.Time, totals []float64) {
 	}
 }
 
-func applyLine(line string, starts []time.Time, totals []float64) {
+func applyLine(line string, starts []time.Time, totals []float64, seen map[string]bool) {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return
@@ -209,6 +244,13 @@ func applyLine(line string, starts []time.Time, totals []float64) {
 	if err != nil {
 		return
 	}
+	if e.Message.ID != "" || e.RequestID != "" {
+		key := e.Message.ID + ":" + e.RequestID
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+	}
 	cost := costOf(e.Message.Usage, priceFor(e.Message.Model))
 	for i, start := range starts {
 		if !ts.Before(start) {
@@ -221,11 +263,12 @@ func applyLine(line string, starts []time.Time, totals []float64) {
 
 type snapshot struct {
 	fiveHour, sevenDay               *limitWindow
+	cacheFetchedAt                   time.Time
 	costToday, costSession, costWeek float64
 }
 
 func gather() snapshot {
-	fiveHour, sevenDay := loadLimits()
+	fiveHour, sevenDay, fetchedAt := loadLimits()
 
 	now := time.Now()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -240,11 +283,12 @@ func gather() snapshot {
 
 	totals := costSince([]time.Time{todayStart, sessionStart, weekStart})
 	return snapshot{
-		fiveHour:    fiveHour,
-		sevenDay:    sevenDay,
-		costToday:   totals[0],
-		costSession: totals[1],
-		costWeek:    totals[2],
+		fiveHour:       fiveHour,
+		sevenDay:       sevenDay,
+		cacheFetchedAt: fetchedAt,
+		costToday:      totals[0],
+		costSession:    totals[1],
+		costWeek:       totals[2],
 	}
 }
 
@@ -331,6 +375,8 @@ func main() {
 	mdns := flag.Bool("mdns", true, "advertise the bridge on the LAN as _aiusage._tcp so the watch can find it")
 	pair := flag.Bool("pair", false, "ask the bridge already running on this machine for a pairing code, print it, and exit")
 	publicURL := flag.String("public-url", "", "https URL a tunnel (e.g. Cloudflare) serves this bridge at; requires auth on every request and is handed to devices when they pair")
+	refreshMinAge := flag.Duration("refresh-min-age", time.Minute, "when a client asks for /usage and Claude Code's usage cache is older than this, have the official claude CLI refresh it first (at most once per this interval; 0 disables)")
+	claudeBin := flag.String("claude", "", "path to the claude CLI used to refresh the usage cache (default: PATH, then ~/.local/bin/claude)")
 	flag.Parse()
 
 	*publicURL = strings.TrimRight(*publicURL, "/")
@@ -347,6 +393,9 @@ func main() {
 
 	mon = newMonitor(parseThresholds(*thresholds), *hysteresis)
 	mon.publicURL = *publicURL
+	if *serveAddr != "" {
+		mon.refresh = newRefresher(*claudeBin, *refreshMinAge)
+	}
 	mon.onUpdate = func() { render(mon.latestRaw()) }
 
 	if *serveAddr != "" {

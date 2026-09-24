@@ -44,6 +44,10 @@ type monitor struct {
 	// the internet, so every request needs a credential, paired or not.
 	publicURL string
 
+	// refresh, when set, has the official CLI refresh Claude Code's usage
+	// cache before a client is answered from it. See refresh.go.
+	refresh *refresher
+
 	onUpdate func() // optional: tray refresh, called outside the lock
 	started  time.Time
 }
@@ -176,6 +180,16 @@ func (m *monitor) evaluateLocked(s snapshot, now time.Time) []event {
 		}
 	}
 	return fired
+}
+
+// freshen is called before answering a client: if Claude Code's cache was
+// stale and the CLI just refreshed it, resample now rather than serve the old
+// sample for up to pollInterval. The refresher's lock keeps this to one extra
+// sample per refresh, however many clients are waiting.
+func (m *monitor) freshen() {
+	if m.refresh.ensureFresh() {
+		m.poll()
+	}
 }
 
 // latestRaw is the same sample the wire snapshot came from, for the tray.
