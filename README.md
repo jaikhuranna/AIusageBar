@@ -51,7 +51,7 @@ sudo apt install build-essential libgtk-3-dev libayatana-appindicator3-dev
 
 The same snapshot the tray shows can be served as JSON, so anything else on the
 network can read it - that's how the Wear OS companion
-([AIusageWear](../AIusageWear)) gets its numbers:
+([`wearos/`](wearos/)) gets its numbers:
 
 ```sh
 ./aiusagebar -serve :8765              # tray + JSON bridge
@@ -278,6 +278,14 @@ Rules of thumb:
 
 Each client gets its own token. Revoke one by deleting its entry from
 `state.json` and restarting the bridge.
+
+## License
+
+[PolyForm Noncommercial 1.0.0](LICENSE.md). It covers everything here,
+including the Wear OS app in `wearos/`. You may use, change and share it for
+any noncommercial purpose: personal use, research, hobby projects, and
+charitable, educational or public-interest organisations. Commercial use needs
+permission from the copyright holder.
 
 ## Start on login
 

@@ -1,5 +1,5 @@
 // HTTP bridge: exposes the usage snapshot, the alert event ring and device
-// pairing, so other devices (the Wear OS app in ../AIusageWear) can read the
+// pairing, so other devices (the Wear OS app in wearos/) can read the
 // same numbers the tray shows, on the LAN or through a tunnel. The wire
 // contract is the "Endpoints" table in README.md.
 package main
