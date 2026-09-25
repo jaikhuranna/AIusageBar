@@ -75,6 +75,16 @@ Lint's "newer version available" warnings are expected.
   re-render surfaces on a `304`.
 - Screenshots from the watch go in `wearos/screenshots/` (gitignored):
   `adb -s <watch> exec-out screencap -p > wearos/screenshots/<name>.png`.
+  README shots can come from the `claudewear` emulator instead: run a
+  throwaway bridge (`XDG_STATE_HOME=/tmp/x XDG_RUNTIME_DIR=/tmp/x
+  ./aiusagebar -headless -serve 127.0.0.1:8799 -mdns=false`) so the live
+  device list is untouched, and pair at `http://10.0.2.2:8799`. `adb shell
+  input text` doesn't survive the Wear keyboard's confirm, so run
+  `ime disable` on the keyboard while typing, then `ime enable` it again.
+- **Round buttons need a round ripple.** `clickable` on an unclipped box
+  ripples as a square; clip it, or pass `ripple(bounded = false, radius = …)`.
+  Draw spinning icons on a `Canvas` rather than using a glyph, whose box
+  isn't centred on its ink.
 - The wire contract is `../README.md` → Endpoints. Change it there,
   not here.
 

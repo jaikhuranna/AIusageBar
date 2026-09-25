@@ -38,6 +38,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -66,6 +67,7 @@ import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
+import androidx.wear.compose.material3.ripple
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -176,7 +178,7 @@ private fun LimitPage(store: Store, key: String) {
         store.lastError == Store.ERROR_UNPAIRED -> Triple("—", "This watch was unpaired", null)
         snap == null -> Triple("…", if (store.lastError == Store.ERROR_OFFLINE) "Can't reach the desktop" else "Waiting for the desktop", null)
         e == null -> Triple("—", "$name not reported", null)
-        e.unconfirmedReset -> Triple("100%", "left $word", "reset · not confirmed yet")
+        e.unconfirmedReset -> Triple("100%", "left $word", "reset · unconfirmed")
         e.remaining <= 0 && comeback != null -> Triple(untilText(now, comeback), "until Claude's back", "at ${clockText(ctx, comeback, now)}")
         e.remaining <= 0 -> Triple("0%", "left $word", null)
         else -> Triple("${e.remaining}%", "left $word", e.resetsAt?.let { "resets in ${untilText(now, it)}" })
@@ -208,12 +210,12 @@ private fun LimitPage(store: Store, key: String) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Spacer(Modifier.height(18.dp))
-            Text(big, color = Color.White, fontSize = if (big.length > 5) 40.sp else 54.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-            Text(what, color = SOFT, fontSize = 15.sp, textAlign = TextAlign.Center, maxLines = 2)
-            detail?.let { Text(it, color = DIM, fontSize = 13.sp, maxLines = 1) }
+            Spacer(Modifier.height(32.dp))
+            Text(big, color = Color.White, fontSize = if (big.length > 5) 26.sp else 36.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            Text(what, color = SOFT, fontSize = 14.sp, textAlign = TextAlign.Center, maxLines = 2)
+            detail?.let { Text(it, color = DIM, fontSize = 12.sp, maxLines = 1) }
             status?.let { Text(it, color = DIM, fontSize = 11.sp, maxLines = 1) }
-            Spacer(Modifier.height(46.dp)) // keeps the text where it was when the button sat here
+            Spacer(Modifier.height(32.dp)) // sits the text a little below centre, clear of the button
         }
         // Low, in the ring's open gap at the bottom.
         Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) {
@@ -233,24 +235,53 @@ private fun LimitPage(store: Store, key: String) {
     }
 }
 
-/** A small round ↻, clear of the ring. The touch area is larger than the dot. */
+/**
+ * A small round ↻, clear of the ring. The touch area is larger than the dot;
+ * the ripple is the dot's size and round.
+ */
 @Composable
 private fun RefreshButton(spinning: Boolean, onClick: () -> Unit) {
     val spin = rememberInfiniteTransition(label = "spin")
         .animateFloat(0f, 360f, infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Restart), label = "angle")
     Box(
-        Modifier.size(40.dp).clickable(enabled = !spinning, onClick = onClick),
+        Modifier
+            .size(40.dp)
+            .clickable(
+                interactionSource = null,
+                indication = ripple(bounded = false, radius = 15.dp),
+                enabled = !spinning,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        Box(
-            Modifier.size(28.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                "↻",
-                color = Color.White,
-                fontSize = 15.sp,
-                modifier = Modifier.graphicsLayer { rotationZ = if (spinning) spin.value else 0f },
+        Box(Modifier.size(30.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)))
+        // Drawn rather than a ↻ glyph: a glyph's box isn't centred on its ink,
+        // so it wobbled when spun. This circle's centre is the Canvas's centre.
+        Canvas(Modifier.size(14.dp).graphicsLayer { rotationZ = if (spinning) spin.value else 0f }) {
+            val w = 1.6.dp.toPx()
+            val head = 3.dp.toPx()
+            val r = size.minDimension / 2 - head / 2
+            val c = center
+            val start = -30f
+            val sweep = 280f
+            drawArc(
+                Color.White, start, sweep, useCenter = false,
+                topLeft = Offset(c.x - r, c.y - r), size = Size(2 * r, 2 * r),
+                style = Stroke(w, cap = StrokeCap.Round),
+            )
+            // Arrowhead at the arc's end, pointing clockwise.
+            val a = Math.toRadians((start + sweep).toDouble())
+            val rx = kotlin.math.cos(a).toFloat()
+            val ry = kotlin.math.sin(a).toFloat()
+            val end = Offset(c.x + r * rx, c.y + r * ry)
+            drawPath(
+                Path().apply {
+                    moveTo(end.x - ry * head * 1.2f, end.y + rx * head * 1.2f)
+                    lineTo(end.x + rx * head, end.y + ry * head)
+                    lineTo(end.x - rx * head, end.y - ry * head)
+                    close()
+                },
+                Color.White,
             )
         }
     }

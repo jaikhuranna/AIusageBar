@@ -8,7 +8,7 @@ home-screen widgets in [`android/`](android/).
 
 | Wear OS: session | Wear OS: week |
 | :---: | :---: |
-| <img src="docs/screenshots/watch-session.png" width="260" alt="Watch face: 59% left this session, resets in 4h 49m"> | <img src="docs/screenshots/watch-weekly.png" width="260" alt="Watch: 28% left this week, resets in 1d 22h"> |
+| <img src="docs/screenshots/watch-session.png" width="260" alt="Watch: 55% left this session, resets in 4h 14m"> | <img src="docs/screenshots/watch-weekly.png" width="260" alt="Watch: 15% left this week, resets in 1d 8h"> |
 
 | Android widget | Out of session: countdown to the reset | Widget picker in the app |
 | :---: | :---: | :---: |
