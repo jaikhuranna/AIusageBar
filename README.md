@@ -99,6 +99,7 @@ find it without anyone typing an IP address. `-mdns=false` turns that off.
 | `GET /events?since=<id>` | alert events (threshold crossings, window resets) newer than `<id>`, plus the new `high_water` mark |
 | `POST /pair` `{"code":"123456"}` | redeems a pairing code for a per-device token (plus `public_url`, if set) |
 | `GET /healthz` | liveness, no auth, no usage data. Says whether a token is needed |
+| `GET /share` | off unless `-share` is set. The two limits only, no token, readable from web pages (see **Show it on a website**) |
 
 ```json
 {
@@ -238,7 +239,7 @@ credentials-file: /home/<you>/.cloudflared/<UUID>.json
 ingress:
   # Only the bridge's public routes cross the tunnel; everything else 404s.
   - hostname: usage.example.com
-    path: ^/(usage|events|pair|healthz)$
+    path: ^/(usage|events|pair|share|healthz)$
     service: http://127.0.0.1:8765
   - service: http_status:404
 ```
@@ -273,6 +274,49 @@ Every HTTPS certificate is published in Certificate Transparency logs, and
 scanners watch them, so a public hostname is found within minutes however
 random it is. The token is what protects the bridge. It's invisible in use,
 because a client pairs once and sends the token from then on.
+
+## Show it on a website
+
+`-share` opens one read-only route for the public: your remaining session and
+weekly allowance, for a personal site, a status page, a README badge service.
+
+```sh
+./aiusagebar -serve :8765 -public-url https://usage.example.com -share https://you.example
+./aiusagebar -serve :8765 -public-url https://usage.example.com -share '*'   # any site
+```
+
+```sh
+curl https://usage.example.com/share
+```
+
+```json
+{
+  "schema": 1,
+  "five_hour": {"utilization": 53, "remaining": 47, "resets_at": "2026-09-21T18:20:00Z", "resets_in_sec": 16631},
+  "seven_day": {"utilization": 41, "remaining": 59, "resets_at": "2026-09-27T00:00:00Z", "resets_in_sec": 469031},
+  "cache_fetched_at": "2026-09-21T13:43:12Z",
+  "generated_at": "2026-09-21T13:43:29Z"
+}
+```
+
+- It needs no token, even on a bridge that is closed by `-public-url`,
+  and it is the only route that doesn't. Cost and hostname are left out.
+- Browsers can read it only from the origins you list; `*` allows any.
+  Origins match exactly (`https://you.example`, no path).
+- It serves the last 30-second sample and never runs the CLI refresh, so
+  page views can't make your machine spawn anything. The numbers move
+  whenever Claude Code fetches its limits, which is often while you work.
+  When `resets_at` is in the past, that window has reset: show it as full.
+- It's sent with `Cache-Control: public, max-age=30`, so a CDN in front can
+  soak up traffic.
+
+In the page:
+
+```js
+const u = await (await fetch('https://usage.example.com/share')).json()
+const left = (w) => (new Date(w.resets_at) < new Date() ? 100 : w.remaining)
+console.log(`${left(u.five_hour)}% of this session left, ${left(u.seven_day)}% of the week`)
+```
 
 ## Writing another client
 

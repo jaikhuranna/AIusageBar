@@ -376,6 +376,7 @@ func main() {
 	pair := flag.Bool("pair", false, "ask the bridge already running on this machine for a pairing code, print it, and exit")
 	publicURL := flag.String("public-url", "", "https URL a tunnel (e.g. Cloudflare) serves this bridge at; requires auth on every request and is handed to devices when they pair")
 	refreshMinAge := flag.Duration("refresh-min-age", time.Minute, "when a client asks for /usage and Claude Code's usage cache is older than this, have the official claude CLI refresh it first (at most once per this interval; 0 disables)")
+	share := flag.String("share", "", "open GET /share: remaining limits only (no cost, no host), no token, CORS-readable by these comma-separated origins, or * for any website")
 	claudeBin := flag.String("claude", "", "path to the claude CLI used to refresh the usage cache (default: PATH, then ~/.local/bin/claude)")
 	flag.Parse()
 
@@ -393,6 +394,7 @@ func main() {
 
 	mon = newMonitor(parseThresholds(*thresholds), *hysteresis)
 	mon.publicURL = *publicURL
+	mon.shareOrigins = parseOrigins(*share)
 	if *serveAddr != "" {
 		mon.refresh = newRefresher(*claudeBin, *refreshMinAge)
 	}

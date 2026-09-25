@@ -44,6 +44,10 @@ type monitor struct {
 	// the internet, so every request needs a credential, paired or not.
 	publicURL string
 
+	// shareOrigins, when set, opens GET /share: the two limits and nothing
+	// else, readable without a token by pages on these origins ("*" = any).
+	shareOrigins []string
+
 	// refresh, when set, has the official CLI refresh Claude Code's usage
 	// cache before a client is answered from it. See refresh.go.
 	refresh *refresher

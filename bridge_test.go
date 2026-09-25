@@ -152,3 +152,67 @@ func TestListensEverywhere(t *testing.T) {
 		}
 	}
 }
+
+// /share is off by default. Turned on, it answers a closed public bridge
+// without a token, lets only the named origins read it, and carries the
+// limits alone: no cost, no hostname.
+func TestShareIsOptInAndCarriesLimitsOnly(t *testing.T) {
+	m := newTestMonitor(t)
+	m.publicURL = "https://usage.example.com"
+	srv := httptest.NewServer(newMux("", m))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/share")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /share without -share: %s, want 404", resp.Status)
+	}
+
+	m.shareOrigins = parseOrigins("https://jai.example/ , https://other.example")
+	get := func(origin string) (*http.Response, map[string]any) {
+		req, _ := http.NewRequest("GET", srv.URL+"/share", nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var body map[string]any
+		json.NewDecoder(resp.Body).Decode(&body)
+		return resp, body
+	}
+
+	resp, body := get("https://jai.example")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /share on a closed public bridge: %s, want 200", resp.Status)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://jai.example" {
+		t.Errorf("allowed origin got ACAO %q", got)
+	}
+	for _, k := range []string{"cost_today", "cost_session", "cost_week", "host"} {
+		if _, ok := body[k]; ok {
+			t.Errorf("/share leaked %q", k)
+		}
+	}
+
+	if resp, _ := get("https://evil.example"); resp.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Error("an origin not on the list got an ACAO header")
+	}
+	// A cache must key on Origin even for answers that carry no ACAO, or a
+	// CDN serves a scanner's CORS-less copy to the allowed site.
+	for _, origin := range []string{"https://jai.example", "https://evil.example", ""} {
+		if resp, _ := get(origin); resp.Header.Get("Vary") != "Origin" {
+			t.Errorf("GET /share from %q: Vary %q, want Origin", origin, resp.Header.Get("Vary"))
+		}
+	}
+
+	m.shareOrigins = parseOrigins("*")
+	if resp, _ := get("https://anyone.example"); resp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Error("-share * did not open /share to every origin")
+	}
+}

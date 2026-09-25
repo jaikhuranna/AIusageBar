@@ -48,7 +48,7 @@ tunnel: $UUID
 credentials-file: $CF/$UUID.json
 ingress:
   - hostname: $HOST
-    path: ^/(usage|events|pair|healthz)\$
+    path: ^/(usage|events|pair|share|healthz)\$
     service: http://127.0.0.1:$PORT
   - service: http_status:404
 EOF

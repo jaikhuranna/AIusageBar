@@ -24,7 +24,7 @@ terminal.
   snapshot, evaluates alert thresholds, mints pairing codes. Tray and HTTP
   handlers read its cache; nothing else calls `gather()`.
 - `server.go` — the `-serve` bridge: `/usage` (with ETag), `/events`, `/pair`,
-  `/healthz`. The wire contract is the **Endpoints** table in `README.md`.
+  `/healthz`, and the opt-in public `/share` (limits only, CORS, no token). The wire contract is the **Endpoints** table in `README.md`.
 - `refresh.go` — has the official `claude` CLI refresh the usage cache
   when a client asks and it's stale. See the Freshness section in `README.md`.
 - `control.go` — the Unix control socket, the only place pairing codes are

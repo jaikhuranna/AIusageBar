@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -173,6 +174,39 @@ func newMux(token string, m *monitor) *http.ServeMux {
 		writeJSON(w, resp)
 	})
 
+	// /share is the one route meant for the public: a website showing how much
+	// of your plan is left. It is off unless -share names who may read it, and
+	// it carries the limits only, never cost or hostname. It serves the monitor's
+	// cached sample and never runs the CLI refresh, so page views can't make
+	// this machine spawn anything.
+	mux.HandleFunc("/share", func(w http.ResponseWriter, r *http.Request) {
+		if len(m.shareOrigins) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		// The answer depends on Origin unless every origin is allowed. Say so
+		// on every response, matched or not, or a CDN honouring the public
+		// Cache-Control could hand one origin's answer to another.
+		if !slices.Contains(m.shareOrigins, "*") {
+			w.Header().Set("Vary", "Origin")
+		}
+		if origin := allowedOrigin(r.Header.Get("Origin"), m.shareOrigins); origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+		if r.Method == http.MethodOptions {
+			w.Header().Set("Access-Control-Allow-Methods", "GET")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		snap, _ := m.latest()
+		w.Header().Set("Cache-Control", "public, max-age=30")
+		writeJSON(w, shareOf(snap))
+	})
+
 	// /healthz is unauthenticated and carries no usage data, so a client can
 	// find out whether the bridge is up and whether it needs to pair first.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +224,51 @@ func newMux(token string, m *monitor) *http.ServeMux {
 	})
 
 	return mux
+}
+
+// shareSnapshot is the public subset of wireSnapshot.
+type shareSnapshot struct {
+	Schema         int         `json:"schema"`
+	FiveHour       *wireWindow `json:"five_hour"`
+	SevenDay       *wireWindow `json:"seven_day"`
+	CacheFetchedAt string      `json:"cache_fetched_at,omitempty"`
+	GeneratedAt    string      `json:"generated_at"`
+}
+
+func shareOf(s wireSnapshot) shareSnapshot {
+	return shareSnapshot{
+		Schema:         s.Schema,
+		FiveHour:       refreshCountdown(s.FiveHour),
+		SevenDay:       refreshCountdown(s.SevenDay),
+		CacheFetchedAt: s.CacheFetchedAt,
+		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+// parseOrigins splits the -share flag. Origins are compared exactly, so a
+// trailing slash is dropped here rather than silently never matching.
+func parseOrigins(s string) []string {
+	var out []string
+	for _, o := range strings.Split(s, ",") {
+		if o = strings.TrimRight(strings.TrimSpace(o), "/"); o != "" {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// allowedOrigin is the Access-Control-Allow-Origin value for a request from
+// origin, or "" to send none (the browser then refuses to hand over the body).
+func allowedOrigin(origin string, allowed []string) string {
+	for _, a := range allowed {
+		if a == "*" {
+			return "*"
+		}
+		if origin != "" && origin == a {
+			return origin
+		}
+	}
+	return ""
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
