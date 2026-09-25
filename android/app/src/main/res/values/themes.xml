@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The tap card: a see-through window over the home screen. Blur-behind
+         starts at 0 and CardActivity ramps it up with the card, along with its
+         own scrim, so nothing darkens before the animation does. -->
+    <style name="Theme.Card" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <!-- The task's background colour, which launchers paint while animating
+             a window in. Transparent, so no box can appear behind the card. -->
+        <item name="android:colorBackground">@android:color/transparent</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowBlurBehindEnabled">true</item>
+        <item name="android:windowBlurBehindRadius">0dp</item>
+    </style>
+</resources>

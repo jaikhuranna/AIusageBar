@@ -10,7 +10,8 @@ allowance is gone, when each resets, and what the same token usage would have
 cost on pay-as-you-go API pricing. It also serves that snapshot as JSON — on the
 LAN, or from anywhere through a TLS tunnel (Tailscale Funnel or Cloudflare) — with pairing and alert
 events when a limit is about to bite. That bridge is the only data source for
-the Wear OS companion in `wearos/` (design rev 3).
+the Wear OS companion in `wearos/` (design rev 3) and the Android home-screen
+widgets in `android/`.
 
 The point is answering "can I start this long task right now?" without opening a
 terminal.
@@ -46,6 +47,9 @@ terminal.
   those show the live URL and LAN address.
 - `wearos/` — the Wear OS watch app (Kotlin, its own Gradle build). It has its
   own `CLAUDE.md` and `DESIGN.md`; start there for anything on the watch.
+- `android/` — the Android home-screen widgets (Kotlin, its own Gradle build).
+  Its `CLAUDE.md` covers the widgets, the Nothing look and releases. Some
+  files are copied from `wearos/`; keep them in step.
 
 ## Build and run
 
@@ -120,7 +124,7 @@ When the deployment changes (URL, tunnel, flags, how it starts), update
 ## License
 
 PolyForm Noncommercial 1.0.0 (`LICENSE.md`), covering the whole repo including
-`wearos/`. Keep `LICENSE.md` verbatim: only the `Required Notice:` line at the
+`wearos/` and `android/`. Keep `LICENSE.md` verbatim: only the `Required Notice:` line at the
 top is ours. Anything added must be compatible with noncommercial-only
 licensing, so no copyleft code copied in.
 

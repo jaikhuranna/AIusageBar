@@ -4,8 +4,7 @@ GNOME top-bar indicator for [Claude Code](https://claude.com/claude-code) usage.
 
 The same numbers reach your wrist and your phone through the bridge
 (`-serve`): a Wear OS app lives in [`wearos/`](wearos/), and Android
-home-screen widgets are in a separate app, still private and a work in
-progress.
+home-screen widgets in [`android/`](android/).
 
 | Wear OS: session | Wear OS: week |
 | :---: | :---: |
@@ -54,6 +53,18 @@ the tray (same class of dependency the old GTK version needed):
 sudo apt install build-essential libgtk-3-dev libayatana-appindicator3-dev
 ```
 
+The watch and phone apps are separate Gradle builds (Android SDK, JDK 17+),
+installed by sideloading. Both pair with the bridge (see **Pairing a device**):
+
+```sh
+cd wearos  && ./gradlew :wear:assembleRelease   # wear/build/outputs/apk/release/
+cd android && ./gradlew :app:assembleRelease    # app/build/outputs/apk/release/
+```
+
+The phone app has four widgets (a 1x1 and a 2x2 ring, a 2x2 dot matrix, a
+4x2 dashboard) in Nothing OS's style; tapping one opens a card with both
+limits and a refresh.
+
 ## Run
 
 ```sh
@@ -64,7 +75,8 @@ sudo apt install build-essential libgtk-3-dev libayatana-appindicator3-dev
 
 The same snapshot the tray shows can be served as JSON, so anything else on the
 network can read it - that's how the Wear OS companion
-([`wearos/`](wearos/)) gets its numbers:
+([`wearos/`](wearos/)) and the Android widgets ([`android/`](android/)) get
+their numbers:
 
 ```sh
 ./aiusagebar -serve :8765              # tray + JSON bridge
@@ -295,7 +307,8 @@ Each client gets its own token. Revoke one by deleting its entry from
 ## License
 
 [PolyForm Noncommercial 1.0.0](LICENSE.md). It covers everything here,
-including the Wear OS app in `wearos/`. You may use, change and share it for
+including the Wear OS app in `wearos/` and the Android widgets in
+`android/`. You may use, change and share it for
 any noncommercial purpose: personal use, research, hobby projects, and
 charitable, educational or public-interest organisations. Commercial use needs
 permission from the copyright holder.

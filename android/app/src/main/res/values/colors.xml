@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Nothing's widget color tokens, the ones its own community widgets use. On native Android the
+  system resolves the Material You palette itself, so only the mapping is needed:
+    widgetBg        light system_neutral1_50   dark system_neutral1_900
+    widgetElements  light #000000              dark #ffffff
+  The launcher inflates widget layouts with this app's resources under its own
+  configuration, so these follow the wallpaper and dark mode live.
+-->
+<resources>
+    <color name="widget_bg">@android:color/system_neutral1_50</color>
+    <color name="widget_elements">#FF000000</color>
+
+    <!-- The orange, timer yellow and grey are fixed, so they live in Render.kt. -->
+</resources>

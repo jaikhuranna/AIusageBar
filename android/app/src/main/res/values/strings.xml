@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Claude usage</string>
+    <string name="widget_ring">Claude ring</string>
+    <string name="widget_ring_large">Claude ring, large</string>
+    <string name="widget_matrix">Claude matrix</string>
+    <string name="widget_dash">Claude dash</string>
+    <string name="widget_ring_desc">Weekly limit in the middle, 5h session around the edge</string>
+    <string name="widget_matrix_desc">Session left on a dot-matrix panel, week along the bottom</string>
+    <string name="widget_dash_desc">Both limits, when they reset, and whether you\'ll last</string>
+</resources>
