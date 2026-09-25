@@ -41,6 +41,9 @@ terminal.
 - `scripts/setup-tunnel.sh` — one-shot Cloudflare Tunnel setup: its own
   `~/.cloudflared/aiusage.yml`, a user systemd unit, autostart flags.
 - `aiusagebar.desktop` — autostart entry.
+- `docs/screenshots/` — README images (watch and Android widget). Crop them
+  to the app itself: no status bar, other widgets, or setup screens, since
+  those show the live URL and LAN address.
 - `wearos/` — the Wear OS watch app (Kotlin, its own Gradle build). It has its
   own `CLAUDE.md` and `DESIGN.md`; start there for anything on the watch.
 

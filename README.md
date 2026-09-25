@@ -2,6 +2,19 @@
 
 GNOME top-bar indicator for [Claude Code](https://claude.com/claude-code) usage. Written in Go.
 
+The same numbers reach your wrist and your phone through the bridge
+(`-serve`): a Wear OS app lives in [`wearos/`](wearos/), and Android
+home-screen widgets are in a separate app, still private and a work in
+progress.
+
+| Wear OS: session | Wear OS: week |
+| :---: | :---: |
+| <img src="docs/screenshots/watch-session.png" width="260" alt="Watch face: 59% left this session, resets in 4h 49m"> | <img src="docs/screenshots/watch-weekly.png" width="260" alt="Watch: 28% left this week, resets in 1d 22h"> |
+
+| Android widget | Out of session: countdown to the reset | Widget picker in the app |
+| :---: | :---: | :---: |
+| <img src="docs/screenshots/widget-session.png" width="260" alt="Widget: 10% of the session left, 38% of the week, with pace estimates"> | <img src="docs/screenshots/widget-out.png" width="260" alt="Widget: session out, 2:51 until the 5h reset"> | <img src="docs/screenshots/widget-app.png" width="260" alt="Android app listing the ring and card widgets"> |
+
 - Tray icon = colored dot (green/orange/red) by how close you are to your
   worst plan limit. Tray text = `5h NN% · 7d NN%`.
 - Click menu shows:
