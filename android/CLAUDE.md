@@ -105,8 +105,7 @@ checking the widgets.
 Releases: bump `versionCode`/`versionName` in `app/build.gradle.kts`, build
 the release APK, and attach it as `AIusageWidget-<version>.apk` with
 `gh release create widget-v<version> <apk>` (prefixed, since the repo's tags
-are shared with the tray and the watch). Releases up to 0.3.5 were cut from
-the old separate repo. The APK is signed with the local debug
+are shared with the tray and the watch). The APK is signed with the local debug
 key, so an update installs over the old one only from this machine's builds.
 
 Widget-picker previews for the matrix and dash

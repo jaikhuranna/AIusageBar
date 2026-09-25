@@ -65,6 +65,9 @@ The phone app has four widgets (a 1x1 and a 2x2 ring, a 2x2 dot matrix, a
 4x2 dashboard) in Nothing OS's style; tapping one opens a card with both
 limits and a refresh.
 
+Or skip the build: the phone app's APK is attached to each `widget-v*` release
+on the [Releases](https://github.com/jaikhuranna/AIusageBar/releases) page.
+
 ## Run
 
 ```sh
