@@ -29,6 +29,8 @@ class Store(context: Context) {
     var lastError: String? by str("last_error")
 
     var highWater: String? by str("high_water")
+    /** The usage ETag the last good /events poll went with. Events only follow a usage change. */
+    var eventsEtag: String? by str("events_etag")
     var comebackAt: Long by long("comeback_at")
 
     /** Dedupe keys already notified, newest last, so a replayed event stays quiet. */

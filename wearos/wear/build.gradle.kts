@@ -48,7 +48,6 @@ dependencies {
     implementation("androidx.wear.tiles:tiles:1.6.2")
     implementation("androidx.wear.protolayout:protolayout:1.4.2")
     implementation("androidx.wear.watchface:watchface-complications-data-source-ktx:1.3.0")
-    implementation("androidx.wear:wear-ongoing:1.1.0")
     implementation("androidx.concurrent:concurrent-futures:1.3.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 

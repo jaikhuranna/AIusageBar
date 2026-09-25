@@ -17,12 +17,13 @@ fun LimitWindow.effective(now: Instant): Effective =
 /** Pure scheduling and countdown rules, shared by every surface. */
 object Plan {
     /**
-     * The owner's baseline: every 30 min while there's headroom. A fetch is
-     * cheap now that the bridge refreshes its own cache on `GET /usage`.
+     * The owner's baseline: hourly while there's headroom, to spare the
+     * battery. Opening the app always fetches, so this only paces the tile and
+     * complications.
      */
-    val BASE: Duration = Duration.ofMinutes(30)
-    private val BACKOFF_CAP: Duration = Duration.ofMinutes(60)
-    private val FLOOR: Duration = Duration.ofMinutes(15)
+    val BASE: Duration = Duration.ofMinutes(60)
+    private val BACKOFF_CAP: Duration = Duration.ofMinutes(120)
+    private val FLOOR: Duration = Duration.ofMinutes(30)
     private val ONE_MINUTE: Duration = Duration.ofMinutes(1)
 
     fun windows(s: Snapshot, now: Instant): List<Pair<String, Effective>> =
@@ -46,25 +47,39 @@ object Plan {
         return exhausted.mapNotNull { it.resetsAt }.max()
     }
 
-    /** How long until the next background check. */
+    /**
+     * How long until the next background check. A reset that passes between
+     * checks already shows as full (see [effective]), so resets don't get a
+     * wakeup of their own; only the comeback does, via its alarm.
+     */
     fun nextCheck(s: Snapshot?, now: Instant, failures: Int): Duration {
         if (failures > 0) {
-            // 15, 30, then the 60 min cap.
-            val minutes = 15L shl (failures - 1).coerceAtMost(2)
+            // 30, 60, then the 120 min cap.
+            val minutes = 30L shl (failures - 1).coerceAtMost(2)
             return Duration.ofMinutes(minutes.coerceAtMost(BACKOFF_CAP.toMinutes()))
         }
         if (s == null) return FLOOR
         // Out of quota: nothing can change until the reset, so don't ask.
         comeback(s, now)?.let { return Duration.between(now, it).plus(ONE_MINUTE) }
-
         val left = worst(s, now)?.second?.remaining ?: 100
-        val interval = if (left > 50) BASE else FLOOR
-        // Check just after each reset so a rollover shows up promptly.
-        val anchors = listOfNotNull(s.fiveHour?.resetsAt, s.sevenDay?.resetsAt)
-            .map { it.plus(ONE_MINUTE) }
-            .filter { it.isAfter(now.plus(ONE_MINUTE)) }
-        val next = (anchors + now.plus(interval)).min()
-        return maxOf(Duration.between(now, next), ONE_MINUTE)
+        return if (left > 50) BASE else FLOOR
+    }
+
+    /**
+     * The reset worth counting down to: the comeback when Claude is out,
+     * otherwise the soonest upcoming reset among the windows with the least
+     * headroom (the 5h one on a tie, since it comes first).
+     */
+    fun nextReset(s: Snapshot, now: Instant): Pair<String, Instant>? {
+        comeback(s, now)?.let { at ->
+            val key = windows(s, now).firstOrNull { it.second.remaining <= 0 && it.second.resetsAt == at }?.first ?: "five_hour"
+            return key to at
+        }
+        val known = windows(s, now).filter { it.second.resetsAt != null }
+        val least = known.minOfOrNull { it.second.remaining } ?: return null
+        return known.filter { it.second.remaining == least }
+            .minBy { it.second.resetsAt!! }
+            .let { it.first to it.second.resetsAt!! }
     }
 }
 

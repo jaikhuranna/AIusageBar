@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Claude Usage</string>
+    <string name="complication_left">Claude left</string>
+    <string name="complication_reset">Claude reset in</string>
 </resources>

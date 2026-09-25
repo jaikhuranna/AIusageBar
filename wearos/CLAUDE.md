@@ -34,11 +34,12 @@ it pairs, so nothing in the app hardcodes it.
     display, address schemes. Unit-tested in `src/test`.
   - `Sync.kt` — the one fetcher, the scheduler (one-shot WorkManager jobs) and
     the tile/complication refresh.
-  - `Alerts.kt` — notifications, the comeback alarm, the Ongoing Activity
-    countdown, and the boot re-arm.
+  - `Alerts.kt` — notifications, the comeback alarm ("Claude's back"), and
+    the boot re-arm. There is no ongoing countdown notification any more.
   - `MainActivity.kt` / `Pairing.kt` — the UI (Samsung Health–style
-    crescents) and NSD pairing.
-  - `UsageTileService.kt`, `UsageComplicationService.kt`.
+    crescents; pages switch by swipe or bezel/crown) and NSD pairing.
+  - `UsageTileService.kt`, `UsageComplicationService.kt` (% left),
+    `ResetComplicationService.kt` (time to the reset that matters).
 
 ## Build and install
 
@@ -69,6 +70,11 @@ Lint's "newer version available" warnings are expected.
 - **Send the token as `Authorization: Bearer`**, never `?token=`; query strings
   end up in proxy logs.
 - A number without its age is a bug: every surface shows staleness.
+- **Battery first.** Background checks are hourly (30 min under 50% left);
+  opening the app is what fetches on demand. Don't add wakeups for resets or
+  re-render surfaces on a `304`.
+- Screenshots from the watch go in `wearos/screenshots/` (gitignored):
+  `adb -s <watch> exec-out screencap -p > wearos/screenshots/<name>.png`.
 - The wire contract is `../README.md` → Endpoints. Change it there,
   not here.
 

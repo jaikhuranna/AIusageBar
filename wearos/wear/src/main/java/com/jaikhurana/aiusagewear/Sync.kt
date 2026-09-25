@@ -41,11 +41,13 @@ object Sync {
 
         val now = System.currentTimeMillis()
         val recent = store.lastError == null && now - store.fetchedAt < MANUAL_THROTTLE_MS
+        val before = store.snapshotJson to store.lastError
         if (force || !(manual && recent)) fetch(ctx, store, listOfNotNull(base, store.lanUrl).distinct(), token, now)
 
         val snap = store.snapshot()
         Alerts.syncComeback(ctx, store, snap)
-        Surfaces.refresh(ctx)
+        // A 304 changes nothing a surface shows, so don't wake them for it.
+        if (store.snapshotJson to store.lastError != before) Surfaces.refresh(ctx)
         if (store.lastError == Store.ERROR_UNPAIRED) {
             Scheduler.cancel(ctx) // polling can't fix a revoked token; the app asks to pair again
         } else {
@@ -75,7 +77,9 @@ object Sync {
             Bridge.Usage.Unauthorized -> store.lastError = Store.ERROR_UNPAIRED
             is Bridge.Usage.Failed -> failed(store)
         }
-        if (store.lastError == null) pollEvents(ctx, store, base, token)
+        // A threshold crossing always moves the numbers, so an unchanged
+        // ETag means no new events: skip the second request.
+        if (store.lastError == null && (store.etag == null || store.etag != store.eventsEtag)) pollEvents(ctx, store, base, token)
     }
 
     private fun ok(store: Store, now: Long) {
@@ -92,6 +96,7 @@ object Sync {
     private fun pollEvents(ctx: Context, store: Store, base: String, token: String) {
         val body = Bridge.events(base, token, store.highWater) ?: return
         val (events, high) = runCatching { parseEvents(body) }.getOrNull() ?: return
+        store.eventsEtag = store.etag
         // The first page after pairing is history: remember it, don't replay it.
         if (store.highWater != null) {
             val seen = store.notifiedKeys
@@ -112,7 +117,12 @@ object Scheduler {
     fun schedule(ctx: Context, delay: Duration) {
         val req = OneTimeWorkRequestBuilder<SyncWorker>()
             .setInitialDelay(delay.toMillis().coerceAtLeast(60_000L), TimeUnit.MILLISECONDS)
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .setRequiresBatteryNotLow(true) // the app still fetches when opened
+                    .build(),
+            )
             .build()
         WorkManager.getInstance(ctx).enqueueUniqueWork(NAME, ExistingWorkPolicy.REPLACE, req)
     }
@@ -129,15 +139,15 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
     }
 }
 
-/** Tells the tile and complication to re-read the cache. */
+/** Tells the tile and complications to re-read the cache. */
 object Surfaces {
     // Both requesters bind to a service, which a BroadcastReceiver's own
     // context refuses (ReceiverCallNotAllowedException): use the app context.
     fun refresh(context: Context) {
         val ctx = context.applicationContext
         TileService.getUpdater(ctx).requestUpdate(UsageTileService::class.java)
-        ComplicationDataSourceUpdateRequester
-            .create(ctx, ComponentName(ctx, UsageComplicationService::class.java))
-            .requestUpdateAll()
+        for (service in listOf(UsageComplicationService::class.java, ResetComplicationService::class.java)) {
+            ComplicationDataSourceUpdateRequester.create(ctx, ComponentName(ctx, service)).requestUpdateAll()
+        }
     }
 }

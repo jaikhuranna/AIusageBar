@@ -10,7 +10,15 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,11 +29,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -50,6 +61,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
+import androidx.wear.compose.foundation.lazy.ScalingLazyListState
+import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
@@ -86,7 +99,7 @@ private fun App() {
     if (!store.paired) PairingScreen() else Paired(store)
 }
 
-/** Swipe left: Session → Weekly → Setup. */
+/** Swipe left or turn the bezel: Session → Weekly → Setup. */
 @Composable
 private fun Paired(store: Store) {
     val notify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -94,12 +107,34 @@ private fun Paired(store: Store) {
         if (Build.VERSION.SDK_INT >= 33) notify.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
     val pager = rememberPagerState { 3 }
-    Box(Modifier.fillMaxSize()) {
+    val setupList = rememberScalingLazyListState()
+    val scope = rememberCoroutineScope()
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    Box(
+        Modifier
+            .fillMaxSize()
+            // One bezel click (or a crown nudge) is one page. On Setup the
+            // list scrolls first, and turning back past its top leaves it.
+            .onRotaryScrollEvent { e ->
+                val d = e.verticalScrollPixels
+                val onSetup = pager.currentPage == 2 && !pager.isScrollInProgress
+                if (onSetup && (if (d > 0) setupList.canScrollForward else setupList.canScrollBackward)) {
+                    scope.launch { setupList.scrollBy(d) }
+                } else if (!pager.isScrollInProgress && kotlin.math.abs(d) >= 1f) {
+                    val to = (pager.currentPage + if (d > 0) 1 else -1).coerceIn(0, 2)
+                    if (to != pager.currentPage) scope.launch { pager.animateScrollToPage(to) }
+                }
+                true
+            }
+            .focusRequester(focus)
+            .focusable(),
+    ) {
         HorizontalPager(state = pager) { page ->
             when (page) {
                 0 -> LimitPage(store, "five_hour")
                 1 -> LimitPage(store, "seven_day")
-                else -> SetupPage(store)
+                else -> SetupPage(store, setupList)
             }
         }
         // The dots show while you swipe, then get out of the way.
@@ -149,7 +184,7 @@ private fun LimitPage(store: Store, key: String) {
     // Only when it matters: fresh data needs no timestamp.
     val stale = store.fetchedAt > 0 && now.toEpochMilli() - store.fetchedAt > 15 * 60_000
     val status = when {
-        refreshing -> null // the pill already says so
+        refreshing -> null // the spinning ↻ already says so
         store.lastError == Store.ERROR_OFFLINE -> "desktop offline · ${agoText(store.fetchedAt, now)}"
         stale -> "updated ${agoText(store.fetchedAt, now)}"
         else -> null
@@ -178,19 +213,14 @@ private fun LimitPage(store: Store, key: String) {
             Text(what, color = SOFT, fontSize = 15.sp, textAlign = TextAlign.Center, maxLines = 2)
             detail?.let { Text(it, color = DIM, fontSize = 13.sp, maxLines = 1) }
             status?.let { Text(it, color = DIM, fontSize = 11.sp, maxLines = 1) }
-            Spacer(Modifier.height(8.dp))
-            val unpaired = store.lastError == Store.ERROR_UNPAIRED
-            Pill(
-                label = when {
-                    unpaired -> "Pair again"
-                    refreshing -> "Refreshing…"
-                    else -> "↻  Refresh"
-                },
-                enabled = !refreshing,
-            ) {
-                if (unpaired) {
-                    unpair(ctx, store)
-                } else {
+            Spacer(Modifier.height(46.dp)) // keeps the text where it was when the button sat here
+        }
+        // Low, in the ring's open gap at the bottom.
+        Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) {
+            if (store.lastError == Store.ERROR_UNPAIRED) {
+                PairAgain { unpair(ctx, store) }
+            } else {
+                RefreshButton(spinning = refreshing) {
                     refreshing = true
                     scope.launch {
                         Sync.run(ctx, manual = true, force = true)
@@ -203,19 +233,41 @@ private fun LimitPage(store: Store, key: String) {
     }
 }
 
-/** The reference's "+ 250 ml" button. */
+/** A small round ↻, clear of the ring. The touch area is larger than the dot. */
 @Composable
-private fun Pill(label: String, enabled: Boolean, onClick: () -> Unit) {
+private fun RefreshButton(spinning: Boolean, onClick: () -> Unit) {
+    val spin = rememberInfiniteTransition(label = "spin")
+        .animateFloat(0f, 360f, infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Restart), label = "angle")
     Box(
-        Modifier
-            .width(118.dp)
-            .height(42.dp)
-            .clip(RoundedCornerShape(50))
-            .background(Color.White.copy(alpha = 0.14f))
-            .clickable(enabled = enabled, onClick = onClick),
+        Modifier.size(40.dp).clickable(enabled = !spinning, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Box(
+            Modifier.size(28.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "↻",
+                color = Color.White,
+                fontSize = 15.sp,
+                modifier = Modifier.graphicsLayer { rotationZ = if (spinning) spin.value else 0f },
+            )
+        }
+    }
+}
+
+@Composable
+private fun PairAgain(onClick: () -> Unit) {
+    Box(
+        Modifier
+            .height(30.dp)
+            .clip(RoundedCornerShape(50))
+            .background(Color.White.copy(alpha = 0.14f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("Pair again", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -256,11 +308,16 @@ private fun PageDots(current: Int, count: Int, alpha: Float) {
 }
 
 @Composable
-private fun SetupPage(store: Store) {
+private fun SetupPage(store: Store, list: ScalingLazyListState) {
     val ctx = LocalContext.current
     val snap = store.snapshot()
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        ScalingLazyColumn(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+        ScalingLazyColumn(
+            Modifier.fillMaxSize(),
+            state = list,
+            horizontalAlignment = Alignment.CenterHorizontally,
+            rotaryScrollableBehavior = null, // the pager's handler routes the bezel
+        ) {
             item { Text("Setup", fontWeight = FontWeight.Bold, fontSize = 18.sp) }
             item { Text(store.host?.let { "Paired with $it" } ?: "Paired", color = SOFT, fontSize = 13.sp) }
             item { Text(store.baseUrl ?: "", color = DIM, fontSize = 10.sp, textAlign = TextAlign.Center) }

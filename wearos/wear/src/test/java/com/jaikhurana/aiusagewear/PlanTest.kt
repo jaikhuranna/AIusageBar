@@ -36,27 +36,43 @@ class PlanTest {
         assertNull(Plan.comeback(snap(win(0, -10), null), now))
     }
 
-    @Test fun plentyLeftChecksEveryHalfHour() {
-        assertEquals(Duration.ofMinutes(30), Plan.nextCheck(snap(win(80, 240), null), now, 0))
+    @Test fun plentyLeftChecksHourly() {
+        assertEquals(Duration.ofMinutes(60), Plan.nextCheck(snap(win(80, 240), null), now, 0))
     }
 
-    @Test fun aResetSoonerThanTheIntervalIsCheckedJustAfter() {
-        assertEquals(Duration.ofMinutes(11), Plan.nextCheck(snap(win(80, 10), null), now, 0))
+    @Test fun aResetDoesNotGetItsOwnWakeup() {
+        assertEquals(Duration.ofMinutes(60), Plan.nextCheck(snap(win(80, 10), null), now, 0))
     }
 
     @Test fun cadenceTightensAsHeadroomShrinks() {
-        assertEquals(Duration.ofMinutes(15), Plan.nextCheck(snap(win(50, 290), null), now, 0))
-        assertEquals(Duration.ofMinutes(15), Plan.nextCheck(snap(win(10, 290), null), now, 0))
+        assertEquals(Duration.ofMinutes(30), Plan.nextCheck(snap(win(50, 290), null), now, 0))
+        assertEquals(Duration.ofMinutes(30), Plan.nextCheck(snap(win(10, 290), null), now, 0))
     }
 
     @Test fun exhaustedStopsPollingUntilTheComeback() {
         assertEquals(Duration.ofMinutes(121), Plan.nextCheck(snap(win(0, 120), null), now, 0))
     }
 
-    @Test fun failuresBackOffToAnHour() {
-        assertEquals(Duration.ofMinutes(15), Plan.nextCheck(null, now, 1))
-        assertEquals(Duration.ofMinutes(30), Plan.nextCheck(null, now, 2))
-        assertEquals(Duration.ofMinutes(60), Plan.nextCheck(null, now, 9))
+    @Test fun failuresBackOffToTwoHours() {
+        assertEquals(Duration.ofMinutes(30), Plan.nextCheck(null, now, 1))
+        assertEquals(Duration.ofMinutes(60), Plan.nextCheck(null, now, 2))
+        assertEquals(Duration.ofMinutes(120), Plan.nextCheck(null, now, 9))
+    }
+
+    @Test fun nextResetFollowsTheTighterWindow() {
+        assertEquals("seven_day" to at(3000), Plan.nextReset(snap(win(60, 100), win(20, 3000)), now))
+        assertEquals("five_hour" to at(100), Plan.nextReset(snap(win(20, 100), win(60, 3000)), now))
+        assertEquals("five_hour" to at(100), Plan.nextReset(snap(win(50, 100), win(50, 3000)), now))
+    }
+
+    @Test fun nextResetIsTheComebackWhenOut() {
+        assertEquals("seven_day" to at(3000), Plan.nextReset(snap(win(0, 100), win(0, 3000)), now))
+        assertEquals("seven_day" to at(3000), Plan.nextReset(snap(win(40, 100), win(0, 3000)), now))
+    }
+
+    @Test fun nextResetSkipsWindowsWithoutAKnownReset() {
+        assertEquals("seven_day" to at(3000), Plan.nextReset(snap(win(0, -10), win(70, 3000)), now))
+        assertNull(Plan.nextReset(snap(win(80, null), null), now))
     }
 
     @Test fun addressesGetTheRightScheme() {

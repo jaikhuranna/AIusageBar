@@ -9,36 +9,36 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
-import android.provider.AlarmClock
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import androidx.wear.ongoing.OngoingActivity
-import androidx.wear.ongoing.Status
 import java.time.Duration
 import java.time.Instant
 
 /**
- * Notifications, the comeback alarm and its countdown.
+ * Notifications and the comeback alarm.
  *
  * The bridge decides alerts ([notifyEvent] only renders them). The comeback
- * countdown is display state derived from `resets_at`, not an alert.
+ * time is display state derived from `resets_at`, not an alert; the alarm only
+ * says "Claude's back" when it arrives.
  */
 object Alerts {
     private const val CH_ALERTS = "alerts"
+    /** The retired Ongoing Activity countdown; deleted on upgrade. */
     private const val CH_COUNTDOWN = "countdown"
     private const val CH_BACK = "back"
     private const val ID_COUNTDOWN = 1
     private const val ID_BACK = 2
 
     fun ensureChannels(ctx: Context) {
-        NotificationManagerCompat.from(ctx).createNotificationChannelsCompat(
+        val nm = NotificationManagerCompat.from(ctx)
+        nm.cancel(ID_COUNTDOWN)
+        nm.deleteNotificationChannel(CH_COUNTDOWN)
+        nm.createNotificationChannelsCompat(
             listOf(
                 NotificationChannelCompat.Builder(CH_ALERTS, NotificationManagerCompat.IMPORTANCE_HIGH)
                     .setName("Limit alerts").build(),
-                NotificationChannelCompat.Builder(CH_COUNTDOWN, NotificationManagerCompat.IMPORTANCE_LOW)
-                    .setName("Comeback countdown").build(),
                 NotificationChannelCompat.Builder(CH_BACK, NotificationManagerCompat.IMPORTANCE_HIGH)
                     .setName("Claude is back").build(),
             ),
@@ -56,7 +56,7 @@ object Alerts {
         post(ctx, e.dedupeKey.hashCode(), base(ctx, CH_ALERTS).setContentTitle(title).setContentText(text))
     }
 
-    /** Arms or clears the alarm and countdown to match the snapshot. */
+    /** Arms or clears the alarm to match the snapshot. */
     fun syncComeback(ctx: Context, store: Store, snap: Snapshot?) {
         val at = snap?.let { Plan.comeback(it, Instant.now()) }?.toEpochMilli() ?: 0L
         if (at == store.comebackAt) return
@@ -72,16 +72,13 @@ object Alerts {
         } else {
             am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
         }
-        showCountdown(ctx, at)
     }
 
     fun clearComeback(ctx: Context) {
         ctx.getSystemService(AlarmManager::class.java).cancel(alarmIntent(ctx))
-        NotificationManagerCompat.from(ctx).cancel(ID_COUNTDOWN)
     }
 
     fun notifyBack(ctx: Context) {
-        NotificationManagerCompat.from(ctx).cancel(ID_COUNTDOWN)
         post(
             ctx,
             ID_BACK,
@@ -92,46 +89,11 @@ object Alerts {
         )
     }
 
-    private fun showCountdown(ctx: Context, at: Long) {
-        val open = openApp(ctx)
-        val b = base(ctx, CH_COUNTDOWN)
-            .setContentTitle("Claude is out")
-            .setContentText("Back at ${clockText(ctx, Instant.ofEpochMilli(at), Instant.now())}")
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setCategory(NotificationCompat.CATEGORY_STATUS)
-            .setUsesChronometer(true)
-            .setChronometerCountDown(true)
-            .setShowWhen(true)
-            .setWhen(at)
-        clockTimerAction(ctx, at)?.let(b::addAction)
-        OngoingActivity.Builder(ctx, ID_COUNTDOWN, b)
-            .setStaticIcon(R.drawable.ic_notification)
-            .setTouchIntent(open)
-            .setStatus(Status.Builder().addTemplate("Back in #t#").addPart("t", Status.TimerPart(at)).build())
-            .build()
-            .apply(ctx)
-        post(ctx, ID_COUNTDOWN, b)
-    }
-
-    /** The real Clock app timer, one tap away. A user tap may launch it; background work may not. */
-    private fun clockTimerAction(ctx: Context, at: Long): NotificationCompat.Action? {
-        val seconds = Duration.between(Instant.now(), Instant.ofEpochMilli(at)).seconds
-        if (seconds !in 1..86_400) return null // Clock timers cap at 24h
-        val intent = Intent(AlarmClock.ACTION_SET_TIMER)
-            .putExtra(AlarmClock.EXTRA_LENGTH, seconds.toInt())
-            .putExtra(AlarmClock.EXTRA_MESSAGE, "Claude's back")
-            .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
-        if (intent.resolveActivity(ctx.packageManager) == null) return null
-        val pi = PendingIntent.getActivity(ctx, 1, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        return NotificationCompat.Action.Builder(null, "Start Clock timer", pi).build()
-    }
-
     private fun base(ctx: Context, channel: String) =
         NotificationCompat.Builder(ctx, channel)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(openApp(ctx))
-            .setAutoCancel(channel != CH_COUNTDOWN)
+            .setAutoCancel(true)
 
     fun openApp(ctx: Context): PendingIntent = PendingIntent.getActivity(
         ctx, 0, Intent(ctx, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,

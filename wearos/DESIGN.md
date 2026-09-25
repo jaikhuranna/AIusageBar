@@ -88,26 +88,34 @@ A `401` later (token revoked, or state file wiped) sends the watch back to step
 
 ## 4. Background cadence
 
-The owner's rule: **check every 30 min**; manual refresh stays manual. (It
-was 2.5 h while the bridge only re-read a cache Claude Code seldom updated;
-now `GET /usage` refreshes that cache, so each check is worth making.) It
-tightens as headroom shrinks so that hitting 0 is noticed promptly:
+The owner's rule: **check hourly**, to spare the battery; opening the app
+always fetches, so background checks only pace the tile and complications. (It
+was 30 min until 2026-09-25, and 2.5 h before `GET /usage` refreshed the
+bridge's cache.) It tightens as headroom shrinks so that hitting 0 is noticed
+reasonably promptly:
 
 | State (worst window, % remaining) | Next check |
 | --- | --- |
-| > 50% left | 30 min, or just after a reset if that's sooner |
-| ≤ 50% left | 15 min (the `WorkManager` floor) |
+| > 50% left | 60 min |
+| ≤ 50% left | 30 min |
 | **0% left** | **no polling** until the comeback time, then one check at comeback + 1 min to confirm |
-| 5h window not started (no `resets_at`) | 30 min |
-| Bridge unreachable | back off 15 → 30 → 60 min, cap 60 min |
+| 5h window not started (no `resets_at`) | 60 min |
+| Bridge unreachable | back off 30 → 60 → 120 min, cap 120 min |
 
-Each run enqueues **one-shot** work for `min(now + interval, next_reset)` with
-`NetworkType.CONNECTED`, because periodic `WorkManager` work can't be pinned to
-wall-clock times. A run makes two small requests:
+Resets don't get a wakeup of their own: one that passes between checks already
+shows as full (see "Offline past a reset" below). Each run enqueues **one-shot**
+work with `NetworkType.CONNECTED` and `requiresBatteryNotLow`, because periodic
+`WorkManager` work can't be pinned to wall-clock times. A run makes at most two
+small requests:
 
 - `GET /usage` with `If-None-Match`. It's usually a `304`, which costs almost
   nothing over a Bluetooth proxy.
-- `GET /events?since=<high-water>`.
+- `GET /events?since=<high-water>`, only when the usage ETag has changed since
+  the last good events poll. A threshold crossing always moves the numbers, so
+  an unchanged ETag means no new events.
+
+A `304` also leaves the tile and complications alone; they are only asked to
+re-render when the snapshot or the error state changed.
 
 **Manual refresh** (the app button, or tapping the tile) is ignored if the last
 fetch succeeded under 60 s ago.
@@ -115,8 +123,8 @@ fetch succeeded under 60 s ago.
 ## 5. Alerts and the comeback timer
 
 **The bridge decides alerts; the watch renders them.** The bridge samples every
-30 s, so it catches every threshold crossing; the watch only polls every 15 min
-to 2.5 h. Its defaults are `80,95,100`, and 100 means "exhausted". The watch
+30 s, so it catches every threshold crossing; the watch only polls every 30
+to 120 min. Its defaults are `80,95,100`, and 100 means "exhausted". The watch
 posts a notification for each event above its high-water mark, deduplicated by
 `dedupe_key`, so reinstalling the app never replays history.
 
@@ -131,22 +139,15 @@ The system Clock app's timer isn't used, for four reasons:
 - Samsung's Clock may not accept it without showing its own screen;
 - the app can't update or cancel it afterwards.
 
-Instead the app uses three pieces of its own. Each is keyed by window, so
-detecting the same exhaustion again replaces them rather than duplicating them:
+Instead the app sets **an exact alarm** at the comeback time (`AlarmManager`
+with `USE_EXACT_ALARM`; fine for a sideloaded app). It fires "Claude's back"
+with a vibration. Re-detecting the same exhaustion replaces it rather than
+duplicating it, and any fetch showing the window isn't exhausted clears it. The
+countdown itself lives in the app, the tile and the reset complication (§7).
 
-1. **An exact alarm** at the comeback time (`AlarmManager` with
-   `SCHEDULE_EXACT_ALARM`, which the user grants once; fine for a sideloaded
-   app). It fires "Claude's back" with a vibration.
-2. **An ongoing countdown notification** (`setUsesChronometer` +
-   `setChronometerCountDown` + `setWhen`), shown as a Wear **Ongoing Activity**.
-   That gives a live countdown icon on the watch face, and the system does the
-   ticking.
-3. **A "Start Clock timer" action** on that notification. Android allows a user
-   tap to launch the real Clock timer. It is offered only when the comeback is
-   under 24h away.
-
-All three are cleared by the confirming check, or by any fetch showing the
-window isn't exhausted after all.
+An ongoing countdown notification (a Wear **Ongoing Activity**, with a "Start
+Clock timer" action) was dropped on 2026-09-25: the reset complication does the
+same job on the watch face without a permanent notification.
 
 **Offline past a reset.** If the desktop is off when `resets_at` passes, the
 watch shows the window as **"reset · full (unconfirmed)"**, not the stale
@@ -189,11 +190,17 @@ layout, not Samsung's graphics.
   §4 cadence, but the system throttles tile updates and doesn't guarantee them.
   Wear OS 6 batches the events for users swiping to and away from a tile; read
   them via `onRecentInteractionEventsAsync()`.
-- **Complications**: `RANGED_VALUE` (an arc on the watch face) and `SHORT_TEXT`
-  ("47%"). Set `UPDATE_PERIOD_SECONDS=0` (the platform minimum is 300 s anyway);
-  the sync worker calls `requestUpdateAll()` after each fetch. Countdown text
-  uses `TimeDifferenceComplicationText`, which ticks on the watch without
-  further updates.
+- **Complications**, two of them:
+  - *Claude left*: `RANGED_VALUE` (an arc on the watch face) and `SHORT_TEXT`
+    ("47%"), or a countdown when out.
+  - *Claude reset in*: `SHORT_TEXT` ("2h 41m", titled "5h"/"7d", or "back"
+    when out) and `LONG_TEXT`. Only the reset that matters (`Plan.nextReset`):
+    the comeback when out, otherwise the tightest window's reset.
+
+  Both set `UPDATE_PERIOD_SECONDS=0` (the platform minimum is 300 s anyway);
+  the sync worker calls `requestUpdateAll()` after a fetch that changed
+  something. Countdown text uses `TimeDifferenceComplicationText`, which ticks
+  on the watch without further updates.
 - **One fetcher, many displays.** The app, tile and complications all read one
   local cache (`Store`), and only `Sync` writes to it.
 
@@ -209,7 +216,7 @@ wearos/
 ```
 
 Kotlin, Compose for Wear OS Material 3, WorkManager, Tiles/ProtoLayout,
-complications, `wear-ongoing`. HTTP is `HttpURLConnection`, JSON is the
+complications. HTTP is `HttpURLConnection`, JSON is the
 platform's `org.json`, and storage is `SharedPreferences`.
 `minSdk 30` (Wear OS 3, which covers the Galaxy Watch4 onwards). Sideloaded over
 adb Wi-Fi debugging onto the physical watch; no emulator.
@@ -256,11 +263,10 @@ one check interval; a day of use shows sane check times and battery use that
 doesn't show up in the watch's battery stats.
 
 ### M4 — Comeback timer
-Per §5: alarm, Ongoing Activity countdown, Clock timer action, the
-later-of-exhausted-windows rule, and "reset · full (unconfirmed)" while
-offline.
-**Exit:** exhausting a window puts a countdown icon on the watch face, it
-vibrates at the reset, and it clears afterwards.
+Per §5: the alarm, the later-of-exhausted-windows rule, and "reset · full
+(unconfirmed)" while offline.
+**Exit:** exhausting a window switches the reset complication to the comeback,
+and the watch vibrates "Claude's back" at the reset.
 
 ### M5 — Tile + complications
 Per §7.
