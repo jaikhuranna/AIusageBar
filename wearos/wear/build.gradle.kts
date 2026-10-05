@@ -11,8 +11,8 @@ android {
         applicationId = "com.jaikhurana.aiusagewear"
         minSdk = 30 // Wear OS 3: Galaxy Watch4 and newer
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.4.0"
     }
 
     buildTypes {

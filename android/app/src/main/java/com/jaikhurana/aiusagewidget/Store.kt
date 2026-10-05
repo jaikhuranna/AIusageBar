@@ -15,6 +15,15 @@ import kotlinx.coroutines.flow.StateFlow
 class Store(context: Context) {
     private val p = context.applicationContext.getSharedPreferences("aiusage", Context.MODE_PRIVATE)
 
+    val provider: UsageProvider get() = UsageProvider.fromWire(p.getString("provider", "claude") ?: "claude")
+
+    // Called under Sync's mutex, so an in-flight response cannot replace another provider's cache.
+    fun selectProvider(value: UsageProvider) = write {
+        putString("provider", value.wire)
+        listOf("snapshot", "etag", "fetched_at", "failures", "last_error", "back_at",
+            "high_water", "events_etag", "comeback_at", "notified").forEach { remove(it) }
+    }
+
     var baseUrl: String? by str("base_url")
     /** The LAN address pairing happened on, tried when [baseUrl] (the tunnel) fails. */
     var lanUrl: String? by str("lan_url")

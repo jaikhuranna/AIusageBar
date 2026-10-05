@@ -170,25 +170,27 @@ private fun LimitPage(store: Store, key: String) {
     val window = if (key == "seven_day") snap?.sevenDay else snap?.fiveHour
     val e = window?.effective(now)
     val comeback = snap?.let { Plan.comeback(it, now) }
-    val name = if (key == "seven_day") "Weekly" else "Session"
+    val name = windowLabel(key, snap)
 
-    val word = if (key == "seven_day") "this week" else "this session"
+    val word = "$name · ${store.provider.title}"
     // One big number, one line saying what it is, and at most one more line.
     val (big, what, detail) = when {
         store.lastError == Store.ERROR_UNPAIRED -> Triple("—", "This watch was unpaired", null)
         snap == null -> Triple("…", if (store.lastError == Store.ERROR_OFFLINE) "Can't reach the desktop" else "Waiting for the desktop", null)
         e == null -> Triple("—", "$name not reported", null)
         e.unconfirmedReset -> Triple("100%", "left $word", "reset · unconfirmed")
-        e.remaining <= 0 && comeback != null -> Triple(untilText(now, comeback), "until Claude's back", "at ${clockText(ctx, comeback, now)}")
+        e.remaining <= 0 && comeback != null -> Triple(untilText(now, comeback), "until ${store.provider.title}'s back", "at ${clockText(ctx, comeback, now)}")
         e.remaining <= 0 -> Triple("0%", "left $word", null)
         else -> Triple("${e.remaining}%", "left $word", e.resetsAt?.let { "resets in ${untilText(now, it)}" })
     }
     // Only when it matters: fresh data needs no timestamp.
-    val stale = store.fetchedAt > 0 && now.toEpochMilli() - store.fetchedAt > 15 * 60_000
+    val sourceAt = snap?.cacheFetchedAt?.toEpochMilli() ?: store.fetchedAt
+    val stale = sourceAt > 0 && now.toEpochMilli() - sourceAt > 15 * 60_000
     val status = when {
         refreshing -> null // the spinning ↻ already says so
-        store.lastError == Store.ERROR_OFFLINE -> "desktop offline · ${agoText(store.fetchedAt, now)}"
-        stale -> "updated ${agoText(store.fetchedAt, now)}"
+        snap?.sourceError != null -> "source unavailable · ${agoText(sourceAt, now)}"
+        store.lastError == Store.ERROR_OFFLINE -> "desktop offline · ${agoText(sourceAt, now)}"
+        stale -> "updated ${agoText(sourceAt, now)}"
         else -> null
     }
 
@@ -340,6 +342,8 @@ private fun PageDots(current: Int, count: Int, alpha: Float) {
 
 @Composable
 private fun SetupPage(store: Store, list: ScalingLazyListState) {
+    val scope = rememberCoroutineScope()
+    var switching by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
     val snap = store.snapshot()
     Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -349,14 +353,25 @@ private fun SetupPage(store: Store, list: ScalingLazyListState) {
             horizontalAlignment = Alignment.CenterHorizontally,
             rotaryScrollableBehavior = null, // the pager's handler routes the bezel
         ) {
+            item {
+                Button(enabled = !switching, onClick = {
+                    switching = true
+                    scope.launch {
+                        Sync.selectProvider(ctx, if (store.provider == UsageProvider.CLAUDE) UsageProvider.CODEX else UsageProvider.CLAUDE)
+                        switching = false
+                    }
+                }) { Text(if (switching) "Switching…" else "Provider: ${store.provider.title}") }
+            }
+            snap?.sourceError?.let { item { Text(it, fontSize = 12.sp, textAlign = TextAlign.Center) } }
             item { Text("Setup", fontWeight = FontWeight.Bold, fontSize = 18.sp) }
             item { Text(store.host?.let { "Paired with $it" } ?: "Paired", color = SOFT, fontSize = 13.sp) }
             item { Text(store.baseUrl ?: "", color = DIM, fontSize = 10.sp, textAlign = TextAlign.Center) }
             store.lanUrl?.let { item { Text("at home: ${it.substringAfter("://")}", color = DIM, fontSize = 10.sp) } }
             item { Spacer(Modifier.size(6.dp)) }
             item { Text("API-cost equivalent", fontWeight = FontWeight.Medium) }
+            if (store.provider == UsageProvider.CODEX) item { Text("Unavailable for Codex", color = DIM, fontSize = 11.sp) }
             item { Text("an estimate, not a bill", color = DIM, fontSize = 11.sp) }
-            if (snap != null) {
+            if (snap?.costAvailable == true) {
                 item { Text("today   $%.2f".format(snap.costToday)) }
                 item { Text("session $%.2f".format(snap.costSession)) }
                 item { Text("week    $%.2f".format(snap.costWeek)) }

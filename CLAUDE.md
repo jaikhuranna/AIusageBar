@@ -2,16 +2,17 @@
 
 ## Goal
 
-Make Claude Code usage visible at a glance, wherever you are.
+Make Claude Code and Codex usage visible at a glance, wherever you are.
 
 AIusageBar is a GNOME top-bar tray indicator (Go) that reads Anthropic's own
 cached plan-limit data and shows how much of the session (5h) and weekly (7d)
 allowance is gone, when each resets, and what the same token usage would have
-cost on pay-as-you-go API pricing. It also serves that snapshot as JSON — on the
+cost on pay-as-you-go API pricing. Codex quotas come from the official CLI
+app-server, with the same provider selection across clients. It also serves that snapshot as JSON — on the
 LAN, or from anywhere through a TLS tunnel (Tailscale Funnel or Cloudflare) — with pairing and alert
 events when a limit is about to bite. That bridge is the only data source for
-the Wear OS companion in `wearos/` (design rev 3) and the Android home-screen
-widgets in `android/`.
+the Wear OS companion in `wearos/` (design rev 3), the Android home-screen
+widgets in `android/`, and the iOS widgets in `ios/`.
 
 The point is answering "can I start this long task right now?" without opening a
 terminal.
@@ -20,6 +21,9 @@ terminal.
 
 - `main.go` — pricing table, readers for `~/.claude.json` (plan limits) and
   `~/.claude/projects/**/*.jsonl` (token usage → cost equivalent), tray UI.
+- `codex.go` — reads subscription quotas through the official Codex CLI
+  app-server (`account/rateLimits/read`), at most once a minute. Authentication
+  stays with the CLI; no inference or credential-file access.
 - `monitor.go` — **the single poll loop.** Samples every 30s, caches the
   snapshot, evaluates alert thresholds, mints pairing codes. Tray and HTTP
   handlers read its cache; nothing else calls `gather()`.
@@ -50,6 +54,9 @@ terminal.
 - `android/` — the Android home-screen widgets (Kotlin, its own Gradle build).
   Its `CLAUDE.md` covers the widgets, the Nothing look and releases. Some
   files are copied from `wearos/`; keep them in step.
+- `ios/` — the same widgets for iPhone (Swift, WidgetKit, an XcodeGen
+  project). Its `CLAUDE.md` covers building on a Mac. `ios/Core/` ports
+  Android's pure rules; keep them in step too.
 
 ## Build and run
 
@@ -77,6 +84,10 @@ When the deployment changes (URL, tunnel, flags, how it starts), update
 
 ## Conventions and gotchas
 
+- **Provider selection is additive.** `/usage`, `/events` and `/share` accept
+  `provider=claude|codex`; omitted means Claude. Keep caches, ETags, alert
+  arming and client comeback state isolated. Codex costs are unavailable.
+  Honor `window_minutes`, `source_error` and `cache_fetched_at` on every client.
 - **Data sources are read-only and local.** Never write to `~/.claude.json` or
   the transcript files; they belong to Claude Code. To get fresher limits,
   `refresh.go` runs the official CLI's local `/usage` command, which makes
@@ -124,7 +135,7 @@ When the deployment changes (URL, tunnel, flags, how it starts), update
 ## License
 
 PolyForm Noncommercial 1.0.0 (`LICENSE.md`), covering the whole repo including
-`wearos/` and `android/`. Keep `LICENSE.md` verbatim: only the `Required Notice:` line at the
+`wearos/`, `android/` and `ios/`. Keep `LICENSE.md` verbatim: only the `Required Notice:` line at the
 top is ours. Anything added must be compatible with noncommercial-only
 licensing, so no copyleft code copied in.
 

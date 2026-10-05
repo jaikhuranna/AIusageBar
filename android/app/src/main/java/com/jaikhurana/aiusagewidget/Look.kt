@@ -29,6 +29,9 @@ data class Look(
     val week: Effective?,
     val fetchedAt: Long,
     val offline: Boolean,
+    val provider: UsageProvider = UsageProvider.CLAUDE,
+    val sessionLength: Duration = SESSION,
+    val weekLength: Duration = WEEK,
 ) {
     /**
      * Old enough that the numbers shouldn't be trusted at full brightness. An
@@ -42,8 +45,16 @@ data class Look(
             else -> offline || Duration.between(Instant.ofEpochMilli(fetchedAt), now) > STALE
         }
 
-    val sessionLeft: Int get() = session?.remaining ?: 100
-    val weekLeft: Int get() = week?.remaining ?: 100
+    val sessionLabel: String get() = durationLabel(sessionLength)
+    val weekLabel: String get() = durationLabel(weekLength)
+    private fun durationLabel(d: Duration): String = when {
+        d.toMinutes() % 1440 == 0L -> "${d.toDays()}D"
+        d.toMinutes() % 60 == 0L -> "${d.toHours()}H"
+        else -> "${d.toMinutes()}M"
+    }
+
+    val sessionLeft: Int get() = session?.remaining ?: 0
+    val weekLeft: Int get() = week?.remaining ?: 0
 
     /** What the countdown in SESSION_OUT / WEEK_OUT is counting to. */
     val countdownTo: Instant?
@@ -62,7 +73,7 @@ data class Look(
      */
     fun sessionTimerFraction(): Float {
         val at = session?.resetsAt ?: return 0f
-        return (Duration.between(now, at).seconds.toFloat() / SESSION.seconds).coerceIn(0f, 1f)
+        return (Duration.between(now, at).seconds.toFloat() / sessionLength.seconds).coerceIn(0f, 1f)
     }
 
     companion object {
@@ -88,14 +99,17 @@ data class Look(
             val back = Instant.ofEpochMilli(backAt)
             val mode = when {
                 !paired || lastError == Store.ERROR_UNPAIRED -> Mode.UNPAIRED
-                snap == null -> Mode.WAITING
+                snap == null || (session == null && week == null) -> Mode.WAITING
                 week != null && week.remaining <= 0 -> Mode.WEEK_OUT
                 session != null && session.remaining <= 0 -> Mode.SESSION_OUT
                 backAt != 0L && !now.isBefore(back) && now.isBefore(back.plus(GO_FOR)) &&
                     (session?.remaining ?: 100) >= GO_WHILE_LEFT -> Mode.GO
                 else -> Mode.NORMAL
             }
-            return Look(mode, now, session, week, fetchedAt, lastError == Store.ERROR_OFFLINE)
+            return Look(mode, now, session, week, snap?.cacheFetchedAt?.toEpochMilli() ?: fetchedAt,
+                lastError == Store.ERROR_OFFLINE || snap?.sourceError != null, snap?.provider ?: UsageProvider.CLAUDE,
+                snap?.fiveHour?.windowMinutes?.let { Duration.ofMinutes(it.toLong()) } ?: SESSION,
+                snap?.sevenDay?.windowMinutes?.let { Duration.ofMinutes(it.toLong()) } ?: WEEK)
         }
     }
 }

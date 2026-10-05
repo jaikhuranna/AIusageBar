@@ -1,4 +1,4 @@
-// monitor is the single sampler. One poll loop reads the Claude data, caches
+// monitor is the single sampler. One poll loop reads provider data, caches
 // the wire snapshot, and evaluates alert thresholds; the tray and every HTTP
 // handler read that cache instead of re-scanning the transcripts themselves.
 //
@@ -28,11 +28,14 @@ const (
 )
 
 type monitor struct {
-	mu   sync.Mutex
-	st   *state
-	raw  snapshot
-	snap wireSnapshot
-	etag string
+	mu        sync.Mutex
+	codexMu   sync.Mutex
+	codex     *codexSource
+	codexSnap wireSnapshot
+	st        *state
+	raw       snapshot
+	snap      wireSnapshot
+	etag      string
 
 	thresholds []int
 	hysteresis int
@@ -86,10 +89,12 @@ func parseThresholds(s string) []int {
 
 func (m *monitor) run() {
 	m.poll()
+	m.pollCodex()
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
 	for range t.C {
 		m.poll()
+		m.pollCodex()
 	}
 }
 
@@ -120,7 +125,15 @@ func (m *monitor) poll() {
 // evaluateLocked compares the new sample against the persisted arming state and
 // returns any events it appended. Hysteresis lives here and nowhere else.
 func (m *monitor) evaluateLocked(s snapshot, now time.Time) []event {
+	return m.evaluateProviderLocked(s, now, "claude")
+}
+
+func (m *monitor) evaluateProviderLocked(s snapshot, now time.Time, provider string) []event {
 	var fired []event
+	prefix := ""
+	if provider != "claude" {
+		prefix = provider + ":"
+	}
 	at := now.UTC().Format(time.RFC3339)
 
 	for _, win := range []struct {
@@ -130,6 +143,7 @@ func (m *monitor) evaluateLocked(s snapshot, now time.Time) []event {
 		if win.w == nil {
 			continue
 		}
+		stateKey := prefix + win.name
 		util := win.w.Utilization
 		resetsAt := ""
 		var resetsIn int64
@@ -143,9 +157,10 @@ func (m *monitor) evaluateLocked(s snapshot, now time.Time) []event {
 
 		// A window whose resets_at moved has rolled over: good news, and the
 		// thresholds below re-arm on the same signal.
-		if prev := m.st.LastReset[win.name]; prev != "" && resetsAt != "" && resetsAt != prev {
+		if prev := m.st.LastReset[stateKey]; prev != "" && resetsAt != "" && resetsAt != prev {
 			fired = append(fired, m.st.appendEvent(event{
-				DedupeKey: win.name + ":reset:" + resetsAt,
+				Provider:  provider,
+				DedupeKey: stateKey + ":reset:" + resetsAt,
 				Kind:      "window_reset",
 				Window:    win.name,
 				Severity:  "info",
@@ -154,11 +169,11 @@ func (m *monitor) evaluateLocked(s snapshot, now time.Time) []event {
 			}))
 		}
 		if resetsAt != "" {
-			m.st.LastReset[win.name] = resetsAt
+			m.st.LastReset[stateKey] = resetsAt
 		}
 
 		for _, th := range m.thresholds {
-			key := win.name + ":" + strconv.Itoa(th)
+			key := stateKey + ":" + strconv.Itoa(th)
 			firedFor, armed := m.st.Fired[key]
 			if armed && (firedFor != resetsAt || util <= th-m.hysteresis) {
 				delete(m.st.Fired, key) // new window, or dropped far enough back
@@ -172,7 +187,8 @@ func (m *monitor) evaluateLocked(s snapshot, now time.Time) []event {
 				sev = "critical"
 			}
 			fired = append(fired, m.st.appendEvent(event{
-				DedupeKey: fmt.Sprintf("%s:%d:%s", win.name, th, resetsAt),
+				Provider:  provider,
+				DedupeKey: fmt.Sprintf("%s:%d:%s", stateKey, th, resetsAt),
 				Kind:      "threshold_crossed",
 				Window:    win.name,
 				Threshold: th,
@@ -318,13 +334,17 @@ func (m *monitor) authRequired(shared string) bool {
 // A 304 means "your copy is still current as of now".
 func etagOf(w wireSnapshot) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "v%d|%s|", schemaVersion, w.Host)
+	fmt.Fprintf(h, "v%d|%s|%s|%s|%t|", schemaVersion, w.Host, w.Provider, w.SourceError, w.CostAvailable)
+	// Source age is visible data. A successful upstream refresh must reach
+	// clients even when utilization is unchanged, or they eventually dim a
+	// perfectly fresh quota snapshot.
+	fmt.Fprint(h, w.CacheFetchedAt)
 	for _, win := range []*wireWindow{w.FiveHour, w.SevenDay} {
 		if win == nil {
 			fmt.Fprint(h, "nil|")
 			continue
 		}
-		fmt.Fprintf(h, "%d@%s|", win.Utilization, win.ResetsAt)
+		fmt.Fprintf(h, "%d@%s/%d|", win.Utilization, win.ResetsAt, win.WindowMinutes)
 	}
 	fmt.Fprintf(h, "%.2f|%.2f|%.2f", w.CostToday, w.CostSession, w.CostWeek)
 	return `"` + hex.EncodeToString(h.Sum(nil))[:16] + `"`
@@ -352,4 +372,39 @@ func randomToken() string {
 	b := make([]byte, 32)
 	rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func (m *monitor) pollCodex() {
+	if m.codex == nil {
+		return
+	}
+	m.codexMu.Lock()
+	defer m.codexMu.Unlock()
+	s := m.codex.sample()
+	m.mu.Lock()
+	m.codexSnap = wireOf(s)
+	if s.sourceError == "" {
+		if fired := m.evaluateProviderLocked(s, time.Now(), "codex"); len(fired) > 0 {
+			if err := m.st.save(); err != nil {
+				log.Printf("state save: %v", err)
+			}
+		}
+	}
+	m.mu.Unlock()
+	if m.onUpdate != nil {
+		m.onUpdate()
+	}
+}
+
+func (m *monitor) latestFor(provider string) (wireSnapshot, string) {
+	if provider != "codex" {
+		return m.latest()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.codexSnap
+	if s.Provider == "" {
+		s = wireOf(snapshot{provider: "codex", sourceError: "Waiting for Codex on the desktop."})
+	}
+	return s, etagOf(s)
 }

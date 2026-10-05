@@ -38,4 +38,12 @@ fun clockText(ctx: Context, t: Instant, now: Instant): String {
     return DateTimeFormatter.ofPattern(pattern).withZone(ZoneId.systemDefault()).format(t)
 }
 
-fun windowLabel(key: String) = if (key == "seven_day") "7d" else "5h"
+fun windowLabel(key: String, snap: Snapshot? = null): String {
+    val minutes = (if (key == "seven_day") snap?.sevenDay else snap?.fiveHour)?.windowMinutes
+        ?: if (key == "seven_day") 10080 else 300
+    return when {
+        minutes % 1440 == 0 -> "${minutes / 1440}d"
+        minutes % 60 == 0 -> "${minutes / 60}h"
+        else -> "${minutes}m"
+    }
+}

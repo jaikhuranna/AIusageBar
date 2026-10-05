@@ -1,4 +1,4 @@
-// AIusageBar - top-bar tray indicator for Claude usage.
+// AIusageBar - top-bar tray indicator for Claude and Codex usage.
 //
 // Shows Anthropic's own session (5h) and weekly (7d) plan-limit utilization
 // and reset times (read from Claude Code's local cache in ~/.claude.json),
@@ -72,8 +72,9 @@ func priceFor(model string) price {
 // ---------- ~/.claude.json: Anthropic's own plan-limit cache ----------
 
 type limitWindow struct {
-	Utilization int    `json:"utilization"`
-	ResetsAt    string `json:"resets_at"`
+	WindowMinutes int    `json:"-"`
+	Utilization   int    `json:"utilization"`
+	ResetsAt      string `json:"resets_at"`
 }
 
 func (w *limitWindow) resetTime() time.Time {
@@ -84,6 +85,9 @@ func (w *limitWindow) resetTime() time.Time {
 	if err != nil {
 		return time.Time{}
 	}
+	if w.WindowMinutes > 0 {
+		return t
+	} // Codex reports exact Unix reset times.
 	// Anthropic's resets_at wobbles by a second across fetches (12:39:59.9,
 	// then 12:40:00.3). Unrounded, each wobble reads as the window rolling
 	// over, which re-arms and re-fires every alert. Real resets are on the
@@ -262,6 +266,7 @@ func applyLine(line string, starts []time.Time, totals []float64, seen map[strin
 // ---------- tray UI ----------
 
 type snapshot struct {
+	provider, sourceError            string
 	fiveHour, sevenDay               *limitWindow
 	cacheFetchedAt                   time.Time
 	costToday, costSession, costWeek float64
@@ -290,6 +295,20 @@ func gather() snapshot {
 		costSession:    totals[1],
 		costWeek:       totals[2],
 	}
+}
+
+func windowLabel(w *limitWindow, fallbackMinutes int) string {
+	minutes := fallbackMinutes
+	if w != nil && w.WindowMinutes > 0 {
+		minutes = w.WindowMinutes
+	}
+	if minutes%1440 == 0 {
+		return fmt.Sprintf("%dd", minutes/1440)
+	}
+	if minutes%60 == 0 {
+		return fmt.Sprintf("%dh", minutes/60)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }
 
 func money(v float64) string { return fmt.Sprintf("$%.2f", v) }
@@ -377,6 +396,7 @@ func main() {
 	publicURL := flag.String("public-url", "", "https URL a tunnel (e.g. Cloudflare) serves this bridge at; requires auth on every request and is handed to devices when they pair")
 	refreshMinAge := flag.Duration("refresh-min-age", time.Minute, "when a client asks for /usage and Claude Code's usage cache is older than this, have the official claude CLI refresh it first (at most once per this interval; 0 disables)")
 	share := flag.String("share", "", "open GET /share: remaining limits only (no cost, no host), no token, CORS-readable by these comma-separated origins, or * for any website")
+	codexBin := flag.String("codex", "", "path to the Codex CLI (default: PATH, then ~/.local/bin/codex); uses its existing ChatGPT login")
 	claudeBin := flag.String("claude", "", "path to the claude CLI used to refresh the usage cache (default: PATH, then ~/.local/bin/claude)")
 	flag.Parse()
 
@@ -393,6 +413,7 @@ func main() {
 	}
 
 	mon = newMonitor(parseThresholds(*thresholds), *hysteresis)
+	mon.codex = newCodexSource(*codexBin)
 	mon.publicURL = *publicURL
 	mon.shareOrigins = parseOrigins(*share)
 	if *serveAddr != "" {
@@ -451,6 +472,9 @@ func shutdown() {
 
 const pairMenuTitle = "Pair a device\u2026"
 
+var trayCodex atomic.Bool
+var mProvider *systray.MenuItem
+
 var (
 	mSession, mWeek                     *systray.MenuItem
 	mCostToday, mCostSession, mCostWeek *systray.MenuItem
@@ -461,6 +485,7 @@ func onReady() {
 	systray.SetTitle("...")
 	systray.SetTooltip("AIusageBar")
 
+	mProvider = systray.AddMenuItem("Show Codex", "Switch between Claude and Codex")
 	mSession = systray.AddMenuItem("Session (5h): ...", "")
 	mSession.Disable()
 	mWeek = systray.AddMenuItem("Week (7d): ...", "")
@@ -484,10 +509,13 @@ func onReady() {
 func loop() {
 	for {
 		select {
+		case <-mProvider.ClickedCh:
+			trayCodex.Store(!trayCodex.Load())
+			render(mon.latestRaw())
 		case <-mPair.ClickedCh:
 			go showPairCode()
 		case <-mRefresh.ClickedCh:
-			go mon.poll()
+			go func() { mon.poll(); mon.pollCodex() }()
 		case <-mQuit.ClickedCh:
 			systray.Quit()
 			return
@@ -526,6 +554,21 @@ func render(s snapshot) {
 	if mSession == nil {
 		return
 	}
+	provider := "Claude"
+	if trayCodex.Load() {
+		provider = "Codex"
+		w, _ := mon.latestFor("codex")
+		fromWire := func(w *wireWindow) *limitWindow {
+			if w == nil {
+				return nil
+			}
+			return &limitWindow{Utilization: w.Utilization, ResetsAt: w.ResetsAt, WindowMinutes: w.WindowMinutes}
+		}
+		s = snapshot{provider: "codex", fiveHour: fromWire(w.FiveHour), sevenDay: fromWire(w.SevenDay), sourceError: w.SourceError}
+		mProvider.SetTitle("Show Claude")
+	} else {
+		mProvider.SetTitle("Show Codex")
+	}
 	fh, wk := "--", "--"
 	if s.fiveHour != nil {
 		fh = fmt.Sprintf("%d%%", s.fiveHour.Utilization)
@@ -533,12 +576,21 @@ func render(s snapshot) {
 	if s.sevenDay != nil {
 		wk = fmt.Sprintf("%d%%", s.sevenDay.Utilization)
 	}
-	systray.SetTitle(fmt.Sprintf("5h %s \u00b7 7d %s", fh, wk))
+	systray.SetTitle(fmt.Sprintf("%s %s %s · %s %s", provider, windowLabel(s.fiveHour, 300), fh, windowLabel(s.sevenDay, 10080), wk))
 	systray.SetIcon(icon(maxPercent(s)))
 	systray.SetTooltip(fmt.Sprintf("Session %s | Week %s | Today's cost equiv %s", fh, wk, money(s.costToday)))
 
-	mSession.SetTitle("Session (5h): " + fmtLimit(s.fiveHour))
-	mWeek.SetTitle("Week (7d): " + fmtLimit(s.sevenDay))
+	mSession.SetTitle(provider + " " + windowLabel(s.fiveHour, 300) + " limit: " + fmtLimit(s.fiveHour))
+	mWeek.SetTitle(provider + " " + windowLabel(s.sevenDay, 10080) + " limit: " + fmtLimit(s.sevenDay))
+	if trayCodex.Load() {
+		systray.SetTooltip("Codex · " + windowLabel(s.fiveHour, 300) + " " + fh + " | " + windowLabel(s.sevenDay, 10080) + " " + wk + " " + s.sourceError)
+		mCostToday.SetTitle("Codex API-cost equivalent: unavailable")
+		mCostSession.Hide()
+		mCostWeek.Hide()
+		return
+	}
+	mCostSession.Show()
+	mCostWeek.Show()
 	mCostToday.SetTitle("API-cost equivalent today: " + money(s.costToday))
 	mCostSession.SetTitle("API-cost equivalent this session: " + money(s.costSession))
 	mCostWeek.SetTitle("API-cost equivalent this week: " + money(s.costWeek))

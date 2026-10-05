@@ -16,8 +16,8 @@ object Bridge {
 
     data class Paired(val token: String, val publicUrl: String?, val host: String)
 
-    fun usage(base: String, token: String, etag: String?): Usage = try {
-        val c = open("$base/usage", token)
+    fun usage(base: String, token: String, etag: String?, provider: UsageProvider = UsageProvider.CLAUDE): Usage = try {
+        val c = open("$base/usage?provider=${provider.wire}", token)
         etag?.let { c.setRequestProperty("If-None-Match", it) }
         try {
             when (c.responseCode) {
@@ -34,8 +34,8 @@ object Bridge {
     }
 
     /** The raw events page, or null if it couldn't be fetched this time. */
-    fun events(base: String, token: String, since: String?): String? = try {
-        val c = open("$base/events" + (since?.let { "?since=$it" } ?: ""), token)
+    fun events(base: String, token: String, since: String?, provider: UsageProvider = UsageProvider.CLAUDE): String? = try {
+        val c = open("$base/events?provider=${provider.wire}" + (since?.let { "&since=$it" } ?: ""), token)
         try {
             if (c.responseCode == 200) c.inputStream.bufferedReader().use { it.readText() } else null
         } finally {

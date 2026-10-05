@@ -97,10 +97,10 @@ private fun App() {
                 Text("The desktop no longer knows this phone. Pair again.", color = MaterialTheme.colorScheme.error)
             }
             PairingScreen()
-            Gallery()
+            Gallery(store.provider)
         } else {
             Status(store, look)
-            Gallery()
+            Gallery(store.provider)
         }
     }
 }
@@ -111,7 +111,16 @@ private fun Status(store: Store, look: Look) {
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
 
-    Text("Claude usage", style = MaterialTheme.typography.headlineSmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        UsageProvider.entries.forEach { provider ->
+            OutlinedButton(enabled = !busy && store.provider != provider, onClick = {
+                busy = true
+                scope.launch { Sync.selectProvider(ctx, provider); busy = false }
+            }) { Text(provider.title) }
+        }
+    }
+    store.snapshot()?.sourceError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    Text("${store.provider.title} usage", style = MaterialTheme.typography.headlineSmall)
     Text(
         buildString {
             append(store.host ?: "desktop")
@@ -139,7 +148,7 @@ private fun Status(store: Store, look: Look) {
 
 /** Every widget in every state, drawn by the same code the home screen uses. Tap one to place it. */
 @Composable
-private fun Gallery() {
+private fun Gallery(provider: UsageProvider) {
     val ctx = LocalContext.current
     val now = remember { Instant.now() }
     Text("Widgets", style = MaterialTheme.typography.titleLarge)
@@ -164,7 +173,7 @@ private fun Gallery() {
             },
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            demoLooks(now).chunked(perRow).forEach { row ->
+            demoLooks(now).map { it.copy(provider = provider) }.chunked(perRow).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     row.forEach { Preview(style, it, size.first, size.second) }
                 }

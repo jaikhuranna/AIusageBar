@@ -97,4 +97,40 @@ class LookTest {
         assertEquals(3, DotFont.width("1"))
         assertEquals(5 + 1 + 1 + 1 + 5 + 1 + 3, DotFont.width("2:41")) // ":" is 1 wide, "1" is 3
     }
+    @Test fun codexUsesItsReportedDurationAndSourceAge() {
+        val s = snap(win(0, 5), null).copy(
+            provider = UsageProvider.CODEX,
+            fiveHour = win(0, 5).copy(windowMinutes = 15),
+            cacheFetchedAt = at(-120),
+            sourceError = "Codex unavailable",
+            costAvailable = false,
+        )
+        val l = look(s)
+        assertEquals(UsageProvider.CODEX, l.provider)
+        assertEquals("15M", l.sessionLabel)
+        assertEquals(1f / 3f, l.sessionTimerFraction(), 0.001f)
+        assertEquals(at(-120).toEpochMilli(), l.fetchedAt)
+        assertTrue(l.stale)
+        assertEquals(0, l.weekLeft) // An absent allowance never appears full.
+        assertEquals(Duration.ofMinutes(15), Plan.nextCheck(s, now, 0))
+    }
+
+    @Test fun aProviderWithNoQuotasWaitsForTheDesktop() {
+        val s = snap(null, null).copy(provider = UsageProvider.CODEX, sourceError = "Sign in on the desktop")
+        assertEquals(Mode.WAITING, look(s).mode)
+        assertEquals(Duration.ofMinutes(15), Plan.nextCheck(s, now, 0))
+    }
+
+    @Test fun codexWireFormatAndLegacyDefaults() {
+        val s = parseSnapshot("""{"provider":"codex","five_hour":{"utilization":25,"remaining":75,"window_minutes":15},"seven_day":null,"cost_available":false,"source_error":"Unavailable"}""")
+        assertEquals(UsageProvider.CODEX, s.provider)
+        assertFalse(s.costAvailable)
+        assertEquals(15, s.fiveHour?.windowMinutes)
+        assertEquals("Unavailable", s.sourceError)
+        assertEquals(null, s.sevenDay)
+        val old = parseSnapshot("""{"five_hour":null,"seven_day":null}""")
+        assertEquals(UsageProvider.CLAUDE, old.provider)
+        assertTrue(old.costAvailable)
+    }
+
 }

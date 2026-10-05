@@ -34,6 +34,7 @@ class Layers(val w: Int, val h: Int) {
 enum class Style { RING, MATRIX, DASH }
 
 object Render {
+    fun accent(look: Look): Int = if (look.provider == UsageProvider.CODEX) 0xFF10A37F.toInt() else ORANGE
     const val ORANGE = 0xFFD97757.toInt()
     const val YELLOW = 0xFFFFC53D.toInt()
     const val GREY = 0xFF8C8C8C.toInt()
@@ -145,8 +146,8 @@ private object RingFace {
             Mode.NORMAL -> {
                 ink.drawCircle(cx, cy, ringR, track)
                 ink.drawCircle(cx, cy, pieR, ink(0.13f))
-                if (look.sessionLeft > 0) acc.drawArc(ring, -90f, 360f * look.sessionLeft / 100, false, stroke(Render.ORANGE, sw))
-                if (look.weekLeft > 0) acc.drawArc(pie, -90f, 360f * look.weekLeft / 100, true, fill(Render.ORANGE))
+                if (look.sessionLeft > 0) acc.drawArc(ring, -90f, 360f * look.sessionLeft / 100, false, stroke(Render.accent(look), sw))
+                if (look.weekLeft > 0) acc.drawArc(pie, -90f, 360f * look.weekLeft / 100, true, fill(Render.accent(look)))
             }
             Mode.SESSION_OUT -> {
                 // The ring becomes a timer: a dot per slice of the 5h window, the
@@ -160,7 +161,7 @@ private object RingFace {
                     acc.drawCircle(cx + ringR * cos(a).toFloat(), cy + ringR * sin(a).toFloat(), sw * 0.4f, if (i < lit) on else off)
                 }
                 ink.drawCircle(cx, cy, pieR, ink(0.08f))
-                if (look.weekLeft > 0) acc.drawArc(pie, -90f, 360f * look.weekLeft / 100, true, fill(Render.ORANGE, 0.22f))
+                if (look.weekLeft > 0) acc.drawArc(pie, -90f, 360f * look.weekLeft / 100, true, fill(Render.accent(look), 0.22f))
                 val text = look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT"
                 ink.fitText(text, RectF(cx - pieR * 0.88f, cy - pieR * 0.42f, cx + pieR * 0.88f, cy + pieR * 0.42f), headline(Color.WHITE))
             }
@@ -174,8 +175,8 @@ private object RingFace {
                 acc.drawLine(cx - d, cy - d, cx + d, cy + d, stroke(Render.GREY, sw))
             }
             Mode.GO -> {
-                acc.drawArc(ring, 0f, 360f, false, stroke(Render.ORANGE, sw))
-                acc.fitText("GO!", RectF(cx - pieR * 1.05f, cy - pieR * 0.55f, cx + pieR * 1.05f, cy + pieR * 0.55f), headline(Render.ORANGE))
+                acc.drawArc(ring, 0f, 360f, false, stroke(Render.accent(look), sw))
+                acc.fitText("GO!", RectF(cx - pieR * 1.05f, cy - pieR * 0.55f, cx + pieR * 1.05f, cy + pieR * 0.55f), headline(Render.accent(look)))
             }
         }
     }
@@ -235,35 +236,35 @@ private object MatrixFace {
             Mode.UNPAIRED -> big = "PAIR" to INK
             Mode.WAITING -> big = "…" to INK
             Mode.NORMAL -> {
-                put("5H", 1, top, INK)
+                put(look.sessionLabel, 1, top, INK)
                 putRight(shortCountdown(look.now, look.session?.resetsAt), cols - 2, top, INK)
-                big = look.sessionLeft.toString() to ORANGE
-                bar("7D", INK, look.weekLeft, ORANGE)
+                big = (if (look.session == null) "--" else look.sessionLeft.toString()) to ORANGE
+                bar(look.weekLabel, INK, look.weekLeft, ORANGE)
             }
             Mode.SESSION_OUT -> {
-                put("5H", 1, top, YELLOW)
+                put(look.sessionLabel, 1, top, YELLOW)
                 putRight("OUT", cols - 2, top, YELLOW)
                 big = (look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT") to YELLOW
-                bar("7D", INK, look.weekLeft, ORANGE)
+                bar(look.weekLabel, INK, look.weekLeft, ORANGE)
             }
             Mode.WEEK_OUT -> {
-                put("7D", 1, top, GREY)
+                put(look.weekLabel, 1, top, GREY)
                 putRight("OUT", cols - 2, top, GREY)
                 big = (look.countdownTo?.let { countdownText(look.now, it) } ?: "--") to GREY
-                bar("5H", GREY, 0, GREY)
+                bar(look.sessionLabel, GREY, 0, GREY)
                 slashed = true
             }
             Mode.GO -> {
-                putCentered("CLAUDE", top, INK)
+                putCentered(look.provider.title.uppercase(), top, INK)
                 big = "GO!" to ORANGE
-                bar("7D", INK, look.weekLeft, ORANGE)
+                bar(look.weekLabel, INK, look.weekLeft, ORANGE)
             }
         }
 
         big?.let { (text, v) ->
             val canvas = if (v == INK) l.inkCanvas else l.accCanvas
             val color = when (v) {
-                ORANGE -> Render.ORANGE
+                ORANGE -> Render.accent(look)
                 YELLOW -> Render.YELLOW
                 GREY -> Render.GREY
                 else -> Color.WHITE
@@ -294,7 +295,7 @@ private object MatrixFace {
         val rad = pitch * 0.36f
         val off = ink(0.09f)
         val on = ink()
-        val paints = mapOf(ORANGE to fill(Render.ORANGE), YELLOW to fill(Render.YELLOW), GREY to fill(Render.GREY))
+        val paints = mapOf(ORANGE to fill(Render.accent(look)), YELLOW to fill(Render.YELLOW), GREY to fill(Render.GREY))
         for (r in 0 until rows) for (c in 0 until cols) {
             val x = ox + (c + 0.5f) * pitch
             val y = oy + (r + 0.5f) * pitch
@@ -330,23 +331,23 @@ private object DashFace {
         val accent = when (look.mode) {
             Mode.SESSION_OUT -> Render.YELLOW
             Mode.WEEK_OUT -> Render.GREY
-            else -> Render.ORANGE
+            else -> Render.accent(look)
         }
 
         // Header: the one place for Ndot-style dots, as a small accent.
         acc.drawCircle(pad + 1.6f * u, pad + 2.6f * u, 1.7f * u, fill(accent))
-        ink.dots("CLAUDE", pad + 5.5f * u, pad, 0.75f * u, ink(0.75f))
+        ink.dots(look.provider.title.uppercase(), pad + 5.5f * u, pad, 0.75f * u, ink(0.75f))
 
         // The big number and what it means.
         val (big, caption, bigColor) = when (look.mode) {
             Mode.UNPAIRED -> Triple("PAIR", "TAP TO SET UP", Color.WHITE)
             Mode.WAITING -> Triple("...", "FETCHING", Color.WHITE)
             Mode.NORMAL ->
-                if (look.sessionLeft <= look.weekLeft) Triple("${look.sessionLeft}", "% SESSION LEFT", Render.ORANGE)
-                else Triple("${look.weekLeft}", "% WEEK LEFT", Render.ORANGE)
-            Mode.SESSION_OUT -> Triple(look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT", "UNTIL THE 5H RESET", Render.YELLOW)
-            Mode.WEEK_OUT -> Triple(look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT", "WEEKLY LIMIT HIT", Render.GREY)
-            Mode.GO -> Triple("GO!", "CLAUDE'S BACK", Render.ORANGE)
+                if (look.week == null || (look.session != null && look.sessionLeft <= look.weekLeft)) Triple("${look.sessionLeft}", "% ${look.sessionLabel} LEFT", Render.accent(look))
+                else Triple("${look.weekLeft}", "% ${look.weekLabel} LEFT", Render.accent(look))
+            Mode.SESSION_OUT -> Triple(look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT", "UNTIL THE ${look.sessionLabel} RESET", Render.YELLOW)
+            Mode.WEEK_OUT -> Triple(look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT", "${look.weekLabel} LIMIT HIT", Render.GREY)
+            Mode.GO -> Triple("GO!", "${look.provider.title.uppercase()}'S BACK", Render.accent(look))
         }
         val bigCanvas = if (bigColor == Color.WHITE) ink else acc
         bigCanvas.fitText(big, RectF(pad, 22 * u, leftW - pad, 52 * u), headline(bigColor), alignLeft = true)
@@ -364,8 +365,8 @@ private object DashFace {
 
         val x0 = leftW + pad
         val x1 = l.w - pad
-        row(ctx, look, l, "5H", look.session, Look.SESSION, 30 * u, x0, x1, u, ::text)
-        row(ctx, look, l, "7D", look.week, Look.WEEK, 70 * u, x0, x1, u, ::text)
+        row(ctx, look, l, look.sessionLabel, look.session, look.sessionLength, 30 * u, x0, x1, u, ::text)
+        row(ctx, look, l, look.weekLabel, look.week, look.weekLength, 70 * u, x0, x1, u, ::text)
 
         if (look.mode == Mode.WEEK_OUT) {
             val (ax, ay, bx, by) = listOf(l.w * 0.04f, l.h * 0.08f, l.w * 0.96f, l.h * 0.92f)
@@ -382,9 +383,9 @@ private object DashFace {
     ) {
         val ink = l.inkCanvas
         val acc = l.accCanvas
-        val paired = look.mode != Mode.UNPAIRED && look.mode != Mode.WAITING
+        val paired = look.mode != Mode.UNPAIRED && look.mode != Mode.WAITING && e != null
         val remaining = e?.remaining ?: 100
-        val timerRow = look.mode == Mode.SESSION_OUT && label == "5H"
+        val timerRow = look.mode == Mode.SESSION_OUT && label == look.sessionLabel
         val out = remaining <= 0 && paired
 
         ink.drawText(label, x0, y + 2.2f * u, text(6f * u, 0.9f))
@@ -399,7 +400,7 @@ private object DashFace {
             !paired -> Color.WHITE
             look.mode == Mode.WEEK_OUT -> Render.GREY
             timerRow -> Render.YELLOW
-            else -> Render.ORANGE
+            else -> Render.accent(look)
         }
         val fp = headline(figColor).apply { textSize = 13 * u }
         val figW = fp.measureText("100%")
@@ -413,10 +414,10 @@ private object DashFace {
         val n = ((bx1 - bx0) / spacing).toInt().coerceAtLeast(1)
         val r = 1.2f * u
         val (lit, on, off) = when {
-            !paired -> Triple(0, fill(Render.ORANGE), ink(0.12f))
+            !paired -> Triple(0, fill(Render.accent(look)), ink(0.12f))
             timerRow -> Triple(ceil(n * look.sessionTimerFraction()).toInt(), fill(Render.YELLOW), fill(Render.YELLOW, 0.22f))
             look.mode == Mode.WEEK_OUT -> Triple(0, fill(Render.GREY), fill(Render.GREY, 0.45f))
-            else -> Triple((n * remaining / 100f).roundToInt(), fill(Render.ORANGE), ink(0.13f))
+            else -> Triple((n * remaining / 100f).roundToInt(), fill(Render.accent(look)), ink(0.13f))
         }
         for (i in 0 until n) {
             val cx = bx0 + (i + 0.5f) * spacing

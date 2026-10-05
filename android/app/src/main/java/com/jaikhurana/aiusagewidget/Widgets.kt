@@ -47,7 +47,7 @@ object Widgets {
 
     fun look(ctx: Context, now: Instant = Instant.now()): Look {
         val s = Store(ctx)
-        return Look.of(s.paired, s.snapshot(), s.fetchedAt, s.lastError, s.backAt, now)
+        return Look.of(s.paired, s.snapshot(), s.fetchedAt, s.lastError, s.backAt, now).copy(provider = s.provider)
     }
 
     fun refreshAll(ctx: Context) {
@@ -91,12 +91,16 @@ object Widgets {
     }
 
     private fun describe(l: Look): String = when (l.mode) {
-        Mode.UNPAIRED -> "Claude usage: not paired. Tap to set up."
-        Mode.WAITING -> "Claude usage: waiting for the first reading."
-        Mode.NORMAL -> "Claude: ${l.sessionLeft}% of the session left, ${l.weekLeft}% of the week. Tap for details."
-        Mode.SESSION_OUT -> "Claude session limit reached" + (l.countdownTo?.let { ", back in ${untilText(l.now, it)}" } ?: "")
-        Mode.WEEK_OUT -> "Claude weekly limit reached" + (l.countdownTo?.let { ", back in ${untilText(l.now, it)}" } ?: "")
-        Mode.GO -> "Claude is back."
+        Mode.UNPAIRED -> "${l.provider.title} usage: not paired. Tap to set up."
+        Mode.WAITING -> "${l.provider.title} usage: waiting for the first reading."
+        Mode.NORMAL -> {
+            val session = if (l.session == null) "primary allowance not reported" else "${l.sessionLeft}% of the ${l.sessionLabel} allowance left"
+            val week = if (l.week == null) "secondary allowance not reported" else "${l.weekLeft}% of the ${l.weekLabel} allowance left"
+            "${l.provider.title}: $session, $week. Tap for details."
+        }
+        Mode.SESSION_OUT -> "${l.provider.title} ${l.sessionLabel} limit reached" + (l.countdownTo?.let { ", back in ${untilText(l.now, it)}" } ?: "")
+        Mode.WEEK_OUT -> "${l.provider.title} ${l.weekLabel} limit reached" + (l.countdownTo?.let { ", back in ${untilText(l.now, it)}" } ?: "")
+        Mode.GO -> "${l.provider.title} is back."
     }
 
     /**

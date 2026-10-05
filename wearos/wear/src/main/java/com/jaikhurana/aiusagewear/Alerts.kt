@@ -21,7 +21,7 @@ import java.time.Instant
  *
  * The bridge decides alerts ([notifyEvent] only renders them). The comeback
  * time is display state derived from `resets_at`, not an alert; the alarm only
- * says "Claude's back" when it arrives.
+ * says "${Store(ctx).provider.title}'s back" when it arrives.
  */
 object Alerts {
     private const val CH_ALERTS = "alerts"
@@ -40,18 +40,19 @@ object Alerts {
                 NotificationChannelCompat.Builder(CH_ALERTS, NotificationManagerCompat.IMPORTANCE_HIGH)
                     .setName("Limit alerts").build(),
                 NotificationChannelCompat.Builder(CH_BACK, NotificationManagerCompat.IMPORTANCE_HIGH)
-                    .setName("Claude is back").build(),
+                    .setName("Quota is back").build(),
             ),
         )
     }
 
     fun notifyEvent(ctx: Context, e: UsageEvent) {
         if (e.kind != "threshold_crossed") return // resets are covered by the comeback alarm
-        val window = if (e.window == "seven_day") "Weekly" else "Session"
+        val store = Store(ctx)
+        val window = windowLabel(e.window, store.snapshot())
         val (title, text) = if (e.threshold >= 100) {
-            "$window limit reached" to "Out of Claude until it resets"
+            "${store.provider.title} $window limit reached" to "Out of ${store.provider.title} until it resets"
         } else {
-            "$window at ${e.threshold}%" to "${100 - e.threshold}% left"
+            "${store.provider.title} $window at ${e.threshold}%" to "${100 - e.threshold}% left"
         }
         post(ctx, e.dedupeKey.hashCode(), base(ctx, CH_ALERTS).setContentTitle(title).setContentText(text))
     }
@@ -83,7 +84,7 @@ object Alerts {
             ctx,
             ID_BACK,
             base(ctx, CH_BACK)
-                .setContentTitle("Claude's back")
+                .setContentTitle("${Store(ctx).provider.title}'s back")
                 .setContentText("Your limit has reset")
                 .setVibrate(longArrayOf(0, 250, 150, 250)),
         )

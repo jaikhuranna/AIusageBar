@@ -33,6 +33,19 @@ object Sync {
         withContext(Dispatchers.IO) { runLocked(context.applicationContext, manual, force) }
     }
 
+    suspend fun selectProvider(context: Context, provider: UsageProvider) = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            val ctx = context.applicationContext
+            val store = Store(ctx)
+            if (store.provider != provider) {
+                Scheduler.cancel(ctx)
+                store.selectProvider(provider)
+                Widgets.refreshAll(ctx)
+                runLocked(ctx, manual = true, force = true)
+            }
+        }
+    }
+
     private fun runLocked(ctx: Context, manual: Boolean, force: Boolean) {
         val store = Store(ctx)
         val base = store.baseUrl
@@ -61,11 +74,11 @@ object Sync {
         val etag = store.etag.takeIf { store.snapshotJson != null }
         var r: Bridge.Usage = Bridge.Usage.Failed("no address")
         for (b in bases) {
-            r = Bridge.usage(b, token, etag)
+            r = Bridge.usage(b, token, etag, store.provider)
             if (r !is Bridge.Usage.Failed) break
         }
         when (r) {
-            is Bridge.Usage.Fresh -> if (runCatching { parseSnapshot(r.body) }.isSuccess) {
+            is Bridge.Usage.Fresh -> if (runCatching { parseSnapshot(r.body).provider == store.provider }.getOrDefault(false)) {
                 store.snapshotJson = r.body
                 store.etag = r.etag
                 ok(store, now)

@@ -201,7 +201,7 @@ private fun Card(look: Look, store: Store, busy: Boolean, onRefresh: () -> Unit,
     val snap = store.snapshot()
     val age = snap?.cacheFetchedAt?.toEpochMilli() ?: look.fetchedAt
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Label("CLAUDE", fg, 1f)
+        Label(look.provider.title.uppercase(), fg, 1f)
         Spacer(Modifier.weight(1f))
         Label(
             when {
@@ -223,14 +223,14 @@ private fun Card(look: Look, store: Store, busy: Boolean, onRefresh: () -> Unit,
         }
     }
 
-    WindowRow("5H SESSION", look.session, Look.SESSION, look, fg, headline, timer = look.mode == Mode.SESSION_OUT)
-    WindowRow("WEEK", look.week, Look.WEEK, look, fg, headline, timer = false)
+    WindowRow(look.sessionLabel, look.session, look.sessionLength, look, fg, headline, timer = look.mode == Mode.SESSION_OUT)
+    WindowRow(look.weekLabel, look.week, look.weekLength, look, fg, headline, timer = false)
 
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier
                 .clip(RoundedCornerShape(50))
-                .background(Color(Render.ORANGE).copy(alpha = if (busy) 0.5f else 1f))
+                .background(Color(Render.accent(look)).copy(alpha = if (busy) 0.5f else 1f))
                 .clickable(enabled = !busy, onClick = onRefresh)
                 .padding(horizontal = 22.dp, vertical = 12.dp),
         ) {
@@ -249,11 +249,11 @@ private fun hero(look: Look): Triple<String, String, Color> = when (look.mode) {
     Mode.UNPAIRED -> Triple("PAIR", "OPEN THE APP TO PAIR", Color(Render.GREY))
     Mode.WAITING -> Triple("…", "WAITING FOR THE DESKTOP", Color(Render.GREY))
     Mode.NORMAL ->
-        if (look.sessionLeft <= look.weekLeft) Triple("${look.sessionLeft}%", "OF THE SESSION LEFT", Color(Render.ORANGE))
-        else Triple("${look.weekLeft}%", "OF THE WEEK LEFT", Color(Render.ORANGE))
-    Mode.SESSION_OUT -> Triple(look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT", "UNTIL THE 5H RESET", Color(Render.YELLOW))
-    Mode.WEEK_OUT -> Triple(look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT", "WEEKLY LIMIT HIT", Color(Render.GREY))
-    Mode.GO -> Triple("GO!", "CLAUDE'S BACK", Color(Render.ORANGE))
+        if (look.week == null || (look.session != null && look.sessionLeft <= look.weekLeft)) Triple("${look.sessionLeft}%", "OF THE ${look.sessionLabel} LIMIT LEFT", Color(Render.accent(look)))
+        else Triple("${look.weekLeft}%", "OF THE ${look.weekLabel} LIMIT LEFT", Color(Render.accent(look)))
+    Mode.SESSION_OUT -> Triple(look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT", "UNTIL THE ${look.sessionLabel} RESET", Color(Render.YELLOW))
+    Mode.WEEK_OUT -> Triple(look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT", "${look.weekLabel} LIMIT HIT", Color(Render.GREY))
+    Mode.GO -> Triple("GO!", "${look.provider.title.uppercase()}'S BACK", Color(Render.accent(look)))
 }
 
 @Composable
@@ -261,13 +261,13 @@ private fun WindowRow(
     label: String, e: Effective?, length: Duration, look: Look, fg: Color, headline: FontFamily, timer: Boolean,
 ) {
     val ctx = LocalContext.current
-    val paired = look.mode != Mode.UNPAIRED && look.mode != Mode.WAITING
+    val paired = look.mode != Mode.UNPAIRED && look.mode != Mode.WAITING && e != null
     val remaining = e?.remaining ?: 100
     val out = paired && remaining <= 0
     val color = when {
         look.mode == Mode.WEEK_OUT -> Color(Render.GREY)
         timer -> Color(Render.YELLOW)
-        else -> Color(Render.ORANGE)
+        else -> Color(Render.accent(look))
     }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row {

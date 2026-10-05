@@ -2,10 +2,14 @@
 
 ## Goal
 
-Show Claude subscription usage on a Wear OS watch (Galaxy Watch): how much of
+Show Claude and Codex subscription usage on a Wear OS watch (Galaxy Watch): how much of
 the session (5h) and weekly (7d) plan limit is left, when each resets, and, when
 a limit hits 0, a countdown on the wrist to when it comes back. It works from
 anywhere the watch has connectivity, as long as the desktop is on.
+
+The Setup page selects the provider. Tiles, complications and alerts follow
+that choice. Clear comeback alarms and event cursors when switching; the first
+events page for the new provider is history. Codex cost estimates are unavailable.
 
 ## Status
 

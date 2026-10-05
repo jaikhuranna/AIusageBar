@@ -30,6 +30,7 @@ type eventSnap struct {
 }
 
 type event struct {
+	Provider  string    `json:"provider,omitempty"`
 	ID        string    `json:"id"`
 	DedupeKey string    `json:"dedupe_key"`
 	Kind      string    `json:"kind"` // threshold_crossed | window_reset

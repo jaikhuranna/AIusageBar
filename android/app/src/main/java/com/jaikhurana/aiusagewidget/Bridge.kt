@@ -16,8 +16,8 @@ object Bridge {
 
     data class Paired(val token: String, val publicUrl: String?, val host: String)
 
-    fun usage(base: String, token: String, etag: String?): Usage = try {
-        val c = open("$base/usage", token)
+    fun usage(base: String, token: String, etag: String?, provider: UsageProvider = UsageProvider.CLAUDE): Usage = try {
+        val c = open("$base/usage?provider=${provider.wire}", token)
         etag?.let { c.setRequestProperty("If-None-Match", it) }
         try {
             when (c.responseCode) {

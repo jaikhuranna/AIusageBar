@@ -1,10 +1,11 @@
 # AIusageBar
 
-GNOME top-bar indicator for [Claude Code](https://claude.com/claude-code) usage. Written in Go.
+GNOME top-bar indicator for [Claude Code](https://claude.com/claude-code) and [Codex](https://developers.openai.com/codex/) subscription usage. Written in Go.
 
 The same numbers reach your wrist and your phone through the bridge
-(`-serve`): a Wear OS app lives in [`wearos/`](wearos/), and Android
-home-screen widgets in [`android/`](android/).
+(`-serve`): a Wear OS app lives in [`wearos/`](wearos/), Android
+home-screen widgets in [`android/`](android/), and the same widgets for
+iPhone in [`ios/`](ios/).
 
 | Wear OS: session | Wear OS: week |
 | :---: | :---: |
@@ -15,7 +16,7 @@ home-screen widgets in [`android/`](android/).
 | <img src="docs/screenshots/widget-session.png" width="260" alt="Widget: 10% of the session left, 38% of the week, with pace estimates"> | <img src="docs/screenshots/widget-out.png" width="260" alt="Widget: session out, 2:51 until the 5h reset"> | <img src="docs/screenshots/widget-app.png" width="260" alt="Android app listing the ring and card widgets"> |
 
 - Tray icon = colored dot (green/orange/red) by how close you are to your
-  worst plan limit. Tray text = `5h NN% · 7d NN%`.
+  worst plan limit. Tray text = `Claude 5h NN% · 7d NN%` or the selected Codex windows.
 - Click menu shows:
   - **Session (5h)** and **Week (7d)** limit utilization and when each resets
     - read straight from Anthropic's own cached usage data in `~/.claude.json`
@@ -68,6 +69,21 @@ limits and a refresh.
 Or skip the build: the phone app's APK is attached to each `widget-v*` release
 on the [Releases](https://github.com/jaikhuranna/AIusageBar/releases) page.
 
+The iPhone app is an Xcode project generated with
+[XcodeGen](https://github.com/yonaskolb/XcodeGen), built on a Mac (Xcode 26+,
+iOS 17+) and installed from Xcode with your own signing team:
+
+```sh
+cd ios && xcodegen && open AIusageWidget.xcodeproj
+```
+
+It has the same faces: the ring (Home Screen and Lock Screen), the matrix and
+the dash. Tapping one opens the app's card and refreshes. The app cards and
+gallery use Liquid Glass on iOS 26+, with material backgrounds on iOS 17–18.
+Choose the Home Screen's **Clear** appearance for WidgetKit's Liquid Glass
+widget background; tinted and Lock Screen appearances are also supported.
+Select Claude or Codex in the app; all its widgets follow that selection.
+
 ## Run
 
 ```sh
@@ -78,8 +94,8 @@ on the [Releases](https://github.com/jaikhuranna/AIusageBar/releases) page.
 
 The same snapshot the tray shows can be served as JSON, so anything else on the
 network can read it - that's how the Wear OS companion
-([`wearos/`](wearos/)) and the Android widgets ([`android/`](android/)) get
-their numbers:
+([`wearos/`](wearos/)) and the Android and iOS widgets
+([`android/`](android/), [`ios/`](ios/)) get their numbers:
 
 ```sh
 ./aiusagebar -serve :8765              # tray + JSON bridge
@@ -91,19 +107,44 @@ On startup the process logs every LAN address it is reachable on, and advertises
 itself over mDNS as `_aiusage._tcp` (via `avahi-publish-service`) so a client can
 find it without anyone typing an IP address. `-mdns=false` turns that off.
 
+### Codex
+
+Install the official Codex CLI on the desktop and sign in with your ChatGPT
+account using `codex login`. The bridge uses that CLI's existing login via
+[`account/rateLimits/read`](https://developers.openai.com/codex/app-server/),
+without opening a thread or making a model request. API-key-only accounts do
+not supply subscription quota windows through this method.
+
+```sh
+./aiusagebar -serve :8765 -codex /path/to/codex  # optional; PATH or ~/.local/bin/codex by default
+```
+
+The desktop menu switches between Claude and Codex. The phone apps have a
+provider selector; each phone's ring, matrix and dash widgets follow it. On
+the watch, choose the provider on the Setup page; its tile, complications and
+notifications follow that selection. Pairing works for both providers with
+the same device token.
+
+Codex is sampled at most once a minute, including requests from multiple
+clients. If the CLI is missing, signed out or offline, the bridge reports
+`source_error` and retains the last successful limits and their original
+`cache_fetched_at`. Clients dim stale data and retry. An absent quota window
+is shown as unknown. Codex cost estimates are unavailable (`cost_available:
+false`); the numeric cost fields are compatibility placeholders.
+
 ### Endpoints
 
 | Endpoint | What it does |
 | --- | --- |
-| `GET /usage` | current snapshot, refreshed first if it's stale (see **Freshness**). Sends an `ETag`; send it back as `If-None-Match` to get `304` when nothing has changed |
-| `GET /events?since=<id>` | alert events (threshold crossings, window resets) newer than `<id>`, plus the new `high_water` mark |
+| `GET /usage` | current snapshot for `?provider=claude` (default) or `?provider=codex`, refreshed first if it's stale (see **Freshness**). Sends an `ETag`; send it back as `If-None-Match` to get `304` when nothing has changed |
+| `GET /events?since=<id>` | alert events for the selected `provider` (default `claude`; append `&provider=codex` for Codex), including threshold crossings and window resets newer than `<id>`, plus the new `high_water` mark |
 | `POST /pair` `{"code":"123456"}` | redeems a pairing code for a per-device token (plus `public_url`, if set) |
 | `GET /healthz` | liveness, no auth, no usage data. Says whether a token is needed |
-| `GET /share` | off unless `-share` is set. The two limits only, no token, readable from web pages (see **Show it on a website**) |
+| `GET /share` | off unless `-share` is set. The selected provider's limits only (`?provider=codex` for Codex), no token, readable from web pages (see **Show it on a website**) |
 
 ```json
 {
-  "schema": 1,
+  "schema": 1, "provider": "claude", "cost_available": true,
   "five_hour": {"utilization": 53, "remaining": 47, "resets_at": "2026-09-21T18:20:00Z", "resets_in_sec": 16631},
   "seven_day": {"utilization": 41, "remaining": 59, "resets_at": "2026-09-27T00:00:00Z", "resets_in_sec": 469031},
   "cost_today": 251.02, "cost_session": 25.06, "cost_week": 351.44,
@@ -114,11 +155,22 @@ find it without anyone typing an IP address. `-mdns=false` turns that off.
 The `ETag` deliberately ignores `generated_at` and `resets_in_sec`: they change
 on every poll but carry no news, and a `304` over a Bluetooth proxy is nearly
 free next to a full body. A `304` means "your copy is still current *now*", so
-treat the fetch time, not `generated_at`, as the freshness clock.
+use `cache_fetched_at` for the age of the source data when it is present,
+and otherwise use the last successful fetch time. ETags include the
+source fetch time so a fresh quota read updates that age even if usage has
+not changed. ETags also include the provider, source errors and window lengths.
+
+`five_hour` and `seven_day` retain their schema-1 names for both providers.
+For Codex these carry the primary and secondary windows, respectively, and
+include `window_minutes`: use that duration for labels, pace and countdown
+fractions. Neither window has a fixed duration; an hourly primary and daily
+secondary are also supported. Reset times always come from `resets_at`. Optional `source_error`
+means the upstream source is unavailable; any attached limits are stale.
+Older bridges that omit `provider` and `cost_available` are treated as Claude.
 
 ### Freshness
 
-The limits come from Claude Code's cache in `~/.claude.json`, which only moves
+Claude limits come from Claude Code's cache in `~/.claude.json`, which only moves
 when Claude Code fetches usage, normally during a session. So asking is
 refreshing: when a client calls `GET /usage` and that cache is more than a
 minute old, the bridge first runs the official CLI's local `/usage` command
@@ -137,8 +189,9 @@ of the numbers. The bridge never talks to Anthropic itself.
 ./aiusagebar -serve :8765 -claude /opt/bin/claude # if claude isn't on PATH or in ~/.local/bin
 ```
 
-`resets_at` is rounded to the minute: Anthropic's value wobbles by a second
-between fetches, which would otherwise look like the window rolling over.
+Claude's `resets_at` is rounded to the minute: Anthropic's value wobbles by a second
+between fetches, which would otherwise look like the window rolling over. Codex reset times
+are preserved to the second.
 
 ### Alerts
 
@@ -354,8 +407,8 @@ Each client gets its own token. Revoke one by deleting its entry from
 ## License
 
 [PolyForm Noncommercial 1.0.0](LICENSE.md). It covers everything here,
-including the Wear OS app in `wearos/` and the Android widgets in
-`android/`. You may use, change and share it for
+including the Wear OS app in `wearos/`, the Android widgets in
+`android/` and the iOS widgets in `ios/`. You may use, change and share it for
 any noncommercial purpose: personal use, research, hobby projects, and
 charitable, educational or public-interest organisations. Commercial use needs
 permission from the copyright holder.

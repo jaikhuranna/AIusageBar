@@ -18,20 +18,24 @@ import (
 // wireWindow is one plan-limit window as sent over the wire. Remaining is
 // included so clients don't have to know the 100-utilization convention.
 type wireWindow struct {
-	Utilization int    `json:"utilization"`
-	Remaining   int    `json:"remaining"`
-	ResetsAt    string `json:"resets_at,omitempty"`
-	ResetsInSec int64  `json:"resets_in_sec"`
+	WindowMinutes int    `json:"window_minutes,omitempty"`
+	Utilization   int    `json:"utilization"`
+	Remaining     int    `json:"remaining"`
+	ResetsAt      string `json:"resets_at,omitempty"`
+	ResetsInSec   int64  `json:"resets_in_sec"`
 }
 
 type wireSnapshot struct {
-	Schema      int         `json:"schema"`
-	FiveHour    *wireWindow `json:"five_hour"`
-	SevenDay    *wireWindow `json:"seven_day"`
-	CostToday   float64     `json:"cost_today"`
-	CostSession float64     `json:"cost_session"`
-	CostWeek    float64     `json:"cost_week"`
-	GeneratedAt string      `json:"generated_at"`
+	Provider      string      `json:"provider"`
+	SourceError   string      `json:"source_error,omitempty"`
+	CostAvailable bool        `json:"cost_available"`
+	Schema        int         `json:"schema"`
+	FiveHour      *wireWindow `json:"five_hour"`
+	SevenDay      *wireWindow `json:"seven_day"`
+	CostToday     float64     `json:"cost_today"`
+	CostSession   float64     `json:"cost_session"`
+	CostWeek      float64     `json:"cost_week"`
+	GeneratedAt   string      `json:"generated_at"`
 	// CacheFetchedAt is when Claude Code last fetched these limits: the real
 	// age of the numbers, as opposed to when the bridge re-read them.
 	CacheFetchedAt string `json:"cache_fetched_at,omitempty"`
@@ -43,8 +47,9 @@ func toWire(w *limitWindow) *wireWindow {
 		return nil
 	}
 	out := &wireWindow{
-		Utilization: w.Utilization,
-		Remaining:   100 - w.Utilization,
+		WindowMinutes: w.WindowMinutes,
+		Utilization:   w.Utilization,
+		Remaining:     100 - w.Utilization,
 	}
 	if out.Remaining < 0 {
 		out.Remaining = 0
@@ -64,7 +69,12 @@ func wireOf(s snapshot) wireSnapshot {
 	if !s.cacheFetchedAt.IsZero() {
 		fetched = s.cacheFetchedAt.UTC().Format(time.RFC3339)
 	}
+	provider := s.provider
+	if provider == "" {
+		provider = "claude"
+	}
 	return wireSnapshot{
+		Provider: provider, SourceError: s.sourceError, CostAvailable: provider == "claude",
 		CacheFetchedAt: fetched,
 		Schema:         schemaVersion,
 		FiveHour:       toWire(s.fiveHour),
@@ -111,8 +121,16 @@ func newMux(token string, m *monitor) *http.ServeMux {
 		// Asking is refreshing: a stale cache gets refreshed before we answer,
 		// so a client's pull-to-refresh and its background poll both get
 		// current numbers, and none of them needs a separate endpoint.
-		m.freshen()
-		snap, etag := m.latest()
+		provider, ok := requestProvider(w, r)
+		if !ok {
+			return
+		}
+		if provider == "codex" {
+			m.pollCodex()
+		} else {
+			m.freshen()
+		}
+		snap, etag := m.latestFor(provider)
 		w.Header().Set("ETag", etag)
 		w.Header().Set("Cache-Control", "no-cache")
 		if matchesETag(r.Header.Get("If-None-Match"), etag) {
@@ -139,7 +157,22 @@ func newMux(token string, m *monitor) *http.ServeMux {
 			unauthorized(w)
 			return
 		}
+		provider, ok := requestProvider(w, r)
+		if !ok {
+			return
+		}
 		events, high := m.eventsSince(r.URL.Query().Get("since"))
+		filtered := []event{}
+		for _, e := range events {
+			p := e.Provider
+			if p == "" {
+				p = "claude"
+			}
+			if p == provider {
+				filtered = append(filtered, e)
+			}
+		}
+		events = filtered
 		writeJSON(w, map[string]any{
 			"schema":     schemaVersion,
 			"events":     events,
@@ -202,7 +235,11 @@ func newMux(token string, m *monitor) *http.ServeMux {
 			http.Error(w, "GET only", http.StatusMethodNotAllowed)
 			return
 		}
-		snap, _ := m.latest()
+		provider, ok := requestProvider(w, r)
+		if !ok {
+			return
+		}
+		snap, _ := m.latestFor(provider)
 		w.Header().Set("Cache-Control", "public, max-age=30")
 		writeJSON(w, shareOf(snap))
 	})
@@ -228,6 +265,8 @@ func newMux(token string, m *monitor) *http.ServeMux {
 
 // shareSnapshot is the public subset of wireSnapshot.
 type shareSnapshot struct {
+	Provider       string      `json:"provider"`
+	SourceError    string      `json:"source_error,omitempty"`
 	Schema         int         `json:"schema"`
 	FiveHour       *wireWindow `json:"five_hour"`
 	SevenDay       *wireWindow `json:"seven_day"`
@@ -237,6 +276,7 @@ type shareSnapshot struct {
 
 func shareOf(s wireSnapshot) shareSnapshot {
 	return shareSnapshot{
+		Provider: s.Provider, SourceError: s.SourceError,
 		Schema:         s.Schema,
 		FiveHour:       refreshCountdown(s.FiveHour),
 		SevenDay:       refreshCountdown(s.SevenDay),
@@ -373,4 +413,16 @@ func localIPs() []string {
 		}
 	}
 	return out
+}
+
+func requestProvider(w http.ResponseWriter, r *http.Request) (string, bool) {
+	p := r.URL.Query().Get("provider")
+	if p == "" {
+		p = "claude"
+	}
+	if p != "claude" && p != "codex" {
+		http.Error(w, "unknown provider", http.StatusBadRequest)
+		return "", false
+	}
+	return p, true
 }

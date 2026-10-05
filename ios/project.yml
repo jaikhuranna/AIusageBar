@@ -1,0 +1,80 @@
+# XcodeGen spec: `xcodegen` (brew install xcodegen) writes AIusageWidget.xcodeproj
+# and the Info.plist / entitlements files from this. Don't edit those by hand.
+name: AIusageWidget
+options:
+  bundleIdPrefix: com.jaikhurana
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: 1
+    CODE_SIGN_STYLE: Automatic
+    TARGETED_DEVICE_FAMILY: "1"
+    # Set your team here or in Xcode's Signing & Capabilities.
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  AIusageWidget:
+    type: application
+    platform: iOS
+    sources: [App, Shared, Core]
+    dependencies:
+      - target: ClaudeWidgets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jaikhurana.aiusagewidget
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: AI Usage
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # Widget taps open aiusage://card.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.jaikhurana.aiusagewidget
+            CFBundleURLSchemes: [aiusage]
+        # Pairing finds the bridge over Bonjour and talks plain HTTP on the LAN.
+        NSBonjourServices: [_aiusage._tcp]
+        NSLocalNetworkUsageDescription: Finds the AIusageBar bridge on your desktop so you can pair with it.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            "10.0.0.0/8": {NSExceptionAllowsInsecureHTTPLoads: true}
+            "172.16.0.0/12": {NSExceptionAllowsInsecureHTTPLoads: true}
+            "192.168.0.0/16": {NSExceptionAllowsInsecureHTTPLoads: true}
+            "127.0.0.0/8": {NSExceptionAllowsInsecureHTTPLoads: true}
+            "169.254.0.0/16": {NSExceptionAllowsInsecureHTTPLoads: true}
+    entitlements:
+      path: App/App.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.jaikhurana.aiusagewidget]
+
+  ClaudeWidgets:
+    type: app-extension
+    platform: iOS
+    sources: [Widgets, Shared, Core]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jaikhurana.aiusagewidget.widgets
+    info:
+      path: Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: AI Usage
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        # The LAN address is the fallback when the tunnel doesn't answer.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            "10.0.0.0/8": {NSExceptionAllowsInsecureHTTPLoads: true}
+            "172.16.0.0/12": {NSExceptionAllowsInsecureHTTPLoads: true}
+            "192.168.0.0/16": {NSExceptionAllowsInsecureHTTPLoads: true}
+            "127.0.0.0/8": {NSExceptionAllowsInsecureHTTPLoads: true}
+            "169.254.0.0/16": {NSExceptionAllowsInsecureHTTPLoads: true}
+    entitlements:
+      path: Widgets/Widgets.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.jaikhurana.aiusagewidget]

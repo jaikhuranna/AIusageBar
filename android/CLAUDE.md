@@ -2,11 +2,17 @@
 
 ## Goal
 
-Show Claude subscription usage on an Android home screen, in Nothing OS's
+Show Claude and Codex subscription usage on an Android home screen, in Nothing OS's
 widget style: how much of the 5h session and the weekly limit is left, a
 countdown when one runs out, and a "GO!" when it comes back. It's the phone
 sibling of the Wear OS app in `../wearos/`, and reads the same desktop bridge
 (the Go app at the repo root) the same way.
+
+The app's provider selector updates every widget and the tap card. Codex
+uses a green accent; Claude uses orange. `window_minutes` controls window
+labels, pace and timer fractions. An unreported window stays unknown.
+Provider changes are serialized with fetches and clear quota/comeback caches,
+while keeping the pairing token.
 
 ## The four widgets
 
@@ -41,6 +47,9 @@ States, shared by all four (`Mode` in `Look.kt`, highest priority first):
   - `Store.kt`, `Sync.kt` — one cache, one fetcher, WorkManager one-shot jobs
     on `Plan.nextCheck`'s cadence.
   - `Look.kt` — the pure state: mode, stale, countdown, pace. Unit-tested.
+    `../ios/Core/` ports this and the other pure files (Model, Plan, Format,
+    DotFont), and `../ios/Shared/Faces.swift` ports `Render.kt`. A rule or face
+    change here should land there too.
   - `DotFont.kt` — a hand-made 5×7 dot-matrix face (Ndot-like, no font
     file). Small accents only; see Typography.
   - `Render.kt` — the three faces (`RingFace`, `MatrixFace`, `DashFace`).

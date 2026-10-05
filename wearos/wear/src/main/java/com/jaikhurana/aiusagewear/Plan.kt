@@ -58,7 +58,7 @@ object Plan {
             val minutes = 30L shl (failures - 1).coerceAtMost(2)
             return Duration.ofMinutes(minutes.coerceAtMost(BACKOFF_CAP.toMinutes()))
         }
-        if (s == null) return FLOOR
+        if (s == null || s.sourceError != null || (s.fiveHour == null && s.sevenDay == null)) return FLOOR
         // Out of quota: nothing can change until the reset, so don't ask.
         comeback(s, now)?.let { return Duration.between(now, it).plus(ONE_MINUTE) }
         val left = worst(s, now)?.second?.remaining ?: 100

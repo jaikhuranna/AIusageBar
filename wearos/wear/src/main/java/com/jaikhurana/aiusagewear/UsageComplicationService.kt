@@ -38,8 +38,8 @@ class UsageComplicationService : SuspendingComplicationDataSourceService() {
         } else {
             plain("$remaining%")
         }
-        val desc = plain(if (comeback != null) "Claude is out" else "Claude: $remaining% left")
-        val title = plain(windowLabel(key))
+        val desc = plain(if (comeback != null) "${Store(this).provider.title} is out" else "${Store(this).provider.title}: $remaining% left")
+        val title = plain(windowLabel(key, Store(this).snapshot()))
         val tap = Alerts.openApp(this)
         return when (type) {
             ComplicationType.RANGED_VALUE ->

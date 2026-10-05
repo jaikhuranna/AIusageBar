@@ -32,8 +32,8 @@ class ResetComplicationService : SuspendingComplicationDataSourceService() {
     }
 
     private fun data(type: ComplicationType, key: String, at: Instant, out: Boolean): ComplicationData? {
-        val name = if (key == "seven_day") "Weekly" else "Session"
-        val desc = plain(if (out) "Claude is back in" else "$name resets in")
+        val name = windowLabel(key, Store(this).snapshot())
+        val desc = plain(if (out) "${Store(this).provider.title} is back in" else "$name resets in")
         val tap = Alerts.openApp(this)
         fun countdown(format: String? = null) =
             TimeDifferenceComplicationText.Builder(TimeDifferenceStyle.SHORT_DUAL_UNIT, CountDownTimeReference(at))
@@ -43,9 +43,9 @@ class ResetComplicationService : SuspendingComplicationDataSourceService() {
         return when (type) {
             ComplicationType.SHORT_TEXT ->
                 ShortTextComplicationData.Builder(countdown(), desc)
-                    .setTitle(plain(if (out) "back" else windowLabel(key))).setTapAction(tap).build()
+                    .setTitle(plain(if (out) "back" else windowLabel(key, Store(this).snapshot()))).setTapAction(tap).build()
             ComplicationType.LONG_TEXT ->
-                LongTextComplicationData.Builder(countdown(if (out) "Claude back in ^1" else "$name resets in ^1"), desc)
+                LongTextComplicationData.Builder(countdown(if (out) "${Store(this).provider.title} back in ^1" else "$name resets in ^1"), desc)
                     .setTapAction(tap).build()
             else -> null
         }

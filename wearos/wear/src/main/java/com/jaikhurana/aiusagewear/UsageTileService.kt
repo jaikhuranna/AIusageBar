@@ -47,16 +47,16 @@ class UsageTileService : TileService() {
         val (big, small, line) = when {
             !store.paired -> Triple("—", "Open to pair", "")
             store.lastError == Store.ERROR_UNPAIRED -> Triple("—", "Pair again", "open the app")
-            snap == null -> Triple("…", "Waiting", "for the desktop")
+            snap == null || (five == null && week == null) -> Triple("…", "Waiting", "for the desktop")
             else -> {
                 val comeback = Plan.comeback(snap, now)
                 val (key, worst) = Plan.worst(snap, now) ?: ("five_hour" to Effective(100, null, false))
-                val status = if (store.lastError == Store.ERROR_OFFLINE) "desktop offline" else null
+                val status = if (snap.sourceError != null) "source unavailable" else if (store.lastError == Store.ERROR_OFFLINE) "desktop offline" else null
                 if (comeback != null) {
                     Triple("Out", "back ${clockText(this, comeback, now)}", status ?: "in ${untilText(now, comeback)}")
                 } else {
                     val reset = worst.resetsAt?.let { "resets ${clockText(this, it, now)}" } ?: ""
-                    Triple("${worst.remaining}%", "left · ${windowLabel(key)}", status ?: reset)
+                    Triple("${worst.remaining}%", "left · ${windowLabel(key, snap)}", status ?: reset)
                 }
             }
         }
@@ -89,6 +89,7 @@ class UsageTileService : TileService() {
             .addContent(
                 Column.Builder()
                     .setHorizontalAlignment(LayoutElementBuilders.HORIZONTAL_ALIGN_CENTER)
+                    .addContent(text(store.provider.title, 12f, WHITE))
                     .addContent(text(big, 34f, WHITE, bold = true))
                     .addContent(text(small, 14f, GREY))
                     .addContent(text(line, 13f, GREY))

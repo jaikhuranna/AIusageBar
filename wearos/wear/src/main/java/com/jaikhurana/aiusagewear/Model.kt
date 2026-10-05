@@ -3,8 +3,15 @@ package com.jaikhurana.aiusagewear
 import org.json.JSONObject
 import java.time.Instant
 
+enum class UsageProvider(val wire: String, val title: String) {
+    CLAUDE("claude", "Claude"), CODEX("codex", "Codex");
+    companion object {
+        fun fromWire(value: String) = entries.firstOrNull { it.wire == value } ?: CLAUDE
+    }
+}
+
 /** One plan-limit window as the bridge reports it. */
-data class LimitWindow(val utilization: Int, val remaining: Int, val resetsAt: Instant?)
+data class LimitWindow(val utilization: Int, val remaining: Int, val resetsAt: Instant?, val windowMinutes: Int? = null)
 
 /** GET /usage. The wire contract is the Endpoints table in AIusageBar's README. */
 data class Snapshot(
@@ -16,6 +23,9 @@ data class Snapshot(
     val host: String,
     /** When Claude Code last fetched these numbers: their true age. Older bridges omit it. */
     val cacheFetchedAt: Instant? = null,
+    val provider: UsageProvider = UsageProvider.CLAUDE,
+    val costAvailable: Boolean = true,
+    val sourceError: String? = null,
 )
 
 /** One entry from GET /events. The bridge decides alerts; we only render them. */
@@ -36,6 +46,9 @@ fun parseSnapshot(json: String): Snapshot {
         costSession = o.optDouble("cost_session", 0.0),
         costWeek = o.optDouble("cost_week", 0.0),
         host = o.optString("host"),
+        provider = UsageProvider.fromWire(o.optString("provider")),
+        costAvailable = o.optBoolean("cost_available", o.optString("provider") != "codex"),
+        sourceError = o.optString("source_error").takeIf { it.isNotBlank() },
         cacheFetchedAt = runCatching { Instant.parse(o.optString("cache_fetched_at")) }.getOrNull(),
     )
 }
@@ -45,6 +58,7 @@ private fun parseWindow(o: JSONObject): LimitWindow {
     return LimitWindow(
         utilization = util,
         remaining = if (o.has("remaining")) o.optInt("remaining") else (100 - util).coerceAtLeast(0),
+        windowMinutes = o.optInt("window_minutes").takeIf { it > 0 },
         resetsAt = runCatching { Instant.parse(o.optString("resets_at")) }.getOrNull(),
     )
 }

@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Claude Usage</string>
-    <string name="complication_left">Claude left</string>
-    <string name="complication_reset">Claude reset in</string>
+    <string name="app_name">AI Usage</string>
+    <string name="complication_left">AI quota left</string>
+    <string name="complication_reset">AI quota reset in</string>
 </resources>

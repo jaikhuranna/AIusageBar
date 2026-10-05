@@ -33,6 +33,19 @@ object Sync {
         withContext(Dispatchers.IO) { runLocked(context.applicationContext, manual, force) }
     }
 
+    suspend fun selectProvider(context: Context, provider: UsageProvider) = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            val ctx = context.applicationContext
+            val store = Store(ctx)
+            if (store.provider != provider) {
+                Alerts.clearComeback(ctx)
+                store.selectProvider(provider)
+                Surfaces.refresh(ctx)
+                runLocked(ctx, manual = true, force = true)
+            }
+        }
+    }
+
     private fun runLocked(ctx: Context, manual: Boolean, force: Boolean) {
         val store = Store(ctx)
         val base = store.baseUrl
@@ -62,11 +75,11 @@ object Sync {
         var r: Bridge.Usage = Bridge.Usage.Failed("no address")
         for (b in bases) {
             base = b
-            r = Bridge.usage(b, token, etag)
+            r = Bridge.usage(b, token, etag, store.provider)
             if (r !is Bridge.Usage.Failed) break
         }
         when (r) {
-            is Bridge.Usage.Fresh -> if (runCatching { parseSnapshot(r.body) }.isSuccess) {
+            is Bridge.Usage.Fresh -> if (runCatching { parseSnapshot(r.body).provider == store.provider }.getOrDefault(false)) {
                 store.snapshotJson = r.body
                 store.etag = r.etag
                 ok(store, now)
@@ -94,7 +107,7 @@ object Sync {
     }
 
     private fun pollEvents(ctx: Context, store: Store, base: String, token: String) {
-        val body = Bridge.events(base, token, store.highWater) ?: return
+        val body = Bridge.events(base, token, store.highWater, store.provider) ?: return
         val (events, high) = runCatching { parseEvents(body) }.getOrNull() ?: return
         store.eventsEtag = store.etag
         // The first page after pairing is history: remember it, don't replay it.
