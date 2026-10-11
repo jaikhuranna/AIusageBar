@@ -8,7 +8,8 @@ countdown when one runs out, and a "GO!" when it comes back. It's the phone
 sibling of the Wear OS app in `../wearos/`, and reads the same desktop bridge
 (the Go app at the repo root) the same way.
 
-The app's provider selector updates every widget and the tap card. Codex
+The widget tap card's header selects Claude or Codex and updates every widget.
+The setup/gallery app shows the current provider but does not have a selector. Codex
 uses a green accent; Claude uses orange. `window_minutes` controls window
 labels, pace and timer fractions. An unreported window stays unknown.
 Provider changes are serialized with fetches and clear quota/comeback caches,
@@ -58,7 +59,7 @@ States, shared by all four (`Mode` in `Look.kt`, highest priority first):
     waking the phone).
   - `CardActivity.kt` — what a widget tap opens once paired: a Nothing-style
     card over the blurred home screen (both limits, resets, pace, the data's
-    age, Refresh, Open app). Opening it refreshes. Its own task, so dismissing
+    age, Claude/Codex selector, Refresh, Open app). Opening it refreshes. Its own task, so dismissing
     it returns to the home screen. Unpaired, a tap opens the app instead.
     The tap is a broadcast to `CardReceiver`, which starts the card: a tap
     that launches an activity directly gets the launcher's widget-to-window

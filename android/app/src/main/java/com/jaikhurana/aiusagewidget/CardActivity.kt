@@ -12,6 +12,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -22,11 +23,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -47,9 +51,11 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
@@ -102,7 +108,7 @@ class CardActivity : ComponentActivity() {
                 snapshotFlow { (maxBlur * backdrop.value).toInt() }
                     .collect { r -> window.attributes = window.attributes.apply { blurBehindRadius = r } }
             }
-            CardScreen(from, card.value, backdrop.value, busy, onRefresh = ::refresh, onOpenApp = ::openApp, onDismiss = { open = false })
+            CardScreen(from, card.value, backdrop.value, busy, onRefresh = ::refresh, onSelectProvider = ::selectProvider, onOpenApp = ::openApp, onDismiss = { open = false })
         }
         onBackPressedDispatcher.addCallback(this) { open = false }
         if (savedInstanceState == null) refresh()
@@ -118,8 +124,23 @@ class CardActivity : ComponentActivity() {
         if (busy) return
         busy = true
         lifecycleScope.launch {
-            Sync.run(this@CardActivity, manual = true, force = true)
-            busy = false
+            try {
+                Sync.run(this@CardActivity, manual = true, force = true)
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    private fun selectProvider(provider: UsageProvider) {
+        if (busy) return
+        busy = true
+        lifecycleScope.launch {
+            try {
+                Sync.selectProvider(this@CardActivity, provider)
+            } finally {
+                busy = false
+            }
         }
     }
 
@@ -141,7 +162,7 @@ class CardActivity : ComponentActivity() {
 }
 
 @Composable
-private fun CardScreen(from: Rect?, card: Float, backdrop: Float, busy: Boolean, onRefresh: () -> Unit, onOpenApp: () -> Unit, onDismiss: () -> Unit) {
+private fun CardScreen(from: Rect?, card: Float, backdrop: Float, busy: Boolean, onRefresh: () -> Unit, onSelectProvider: (UsageProvider) -> Unit, onOpenApp: () -> Unit, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     val changes by Store.changes.collectAsState()
     // On the wall-clock minute, the same instant the widgets' countdown ticks.
@@ -187,13 +208,13 @@ private fun CardScreen(from: Rect?, card: Float, backdrop: Float, busy: Boolean,
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            Card(look, store, busy, onRefresh, onOpenApp)
+            Card(look, store, busy, onRefresh, onSelectProvider, onOpenApp)
         }
     }
 }
 
 @Composable
-private fun Card(look: Look, store: Store, busy: Boolean, onRefresh: () -> Unit, onOpenApp: () -> Unit) {
+private fun Card(look: Look, store: Store, busy: Boolean, onRefresh: () -> Unit, onSelectProvider: (UsageProvider) -> Unit, onOpenApp: () -> Unit) {
     val fg = colorResource(R.color.widget_elements)
     val headline = remember { FontFamily(Fonts.headline) }
 
@@ -201,15 +222,16 @@ private fun Card(look: Look, store: Store, busy: Boolean, onRefresh: () -> Unit,
     val snap = store.snapshot()
     val age = snap?.cacheFetchedAt?.toEpochMilli() ?: look.fetchedAt
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Label(look.provider.title.uppercase(), fg, 1f)
-        Spacer(Modifier.weight(1f))
-        Label(
+        ProviderSelector(look, fg, enabled = !busy, onSelect = onSelectProvider)
+        Text(
             when {
                 busy -> "REFRESHING…"
                 look.offline -> "OFFLINE · ${agoText(age, look.now).uppercase()}"
                 else -> "UPDATED ${agoText(age, look.now).uppercase()}"
             },
-            fg, 0.55f,
+            fg.copy(alpha = 0.55f),
+            TextStyle(fontSize = 10.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.1.em, textAlign = TextAlign.End),
+            Modifier.weight(1f).padding(start = 12.dp),
         )
     }
 
@@ -242,6 +264,32 @@ private fun Card(look: Look, store: Store, busy: Boolean, onRefresh: () -> Unit,
         }
     }
     if (snap != null && store.host != null) Label("FROM ${store.host!!.uppercase()}", fg, 0.35f, size = 10.sp)
+}
+
+/** Switch every widget from the expanded card, without opening the setup app. */
+@Composable
+private fun ProviderSelector(look: Look, fg: Color, enabled: Boolean, onSelect: (UsageProvider) -> Unit) {
+    Row(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        UsageProvider.entries.forEach { provider ->
+            val selected = provider == look.provider
+            val accent = Color(Render.accent(look.copy(provider = provider)))
+            val shape = RoundedCornerShape(50)
+            Box(
+                Modifier
+                    .heightIn(min = 48.dp)
+                    .clip(shape)
+                    .background(if (selected) accent.copy(alpha = 0.15f) else Color.Transparent)
+                    .border(1.dp, if (selected) accent else fg.copy(alpha = 0.2f), shape)
+                    .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = {
+                        if (!selected) onSelect(provider)
+                    })
+                    .padding(horizontal = 10.dp, vertical = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Label(provider.title.uppercase(), if (selected) accent else fg, if (enabled) 1f else 0.5f, size = 11.sp)
+            }
+        }
+    }
 }
 
 /** The big figure: whichever window is closest to biting, or the countdown. */

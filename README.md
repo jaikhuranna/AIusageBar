@@ -119,8 +119,9 @@ not supply subscription quota windows through this method.
 ./aiusagebar -serve :8765 -codex /path/to/codex  # optional; PATH or ~/.local/bin/codex by default
 ```
 
-The desktop menu switches between Claude and Codex. The phone apps have a
-provider selector; each phone's ring, matrix and dash widgets follow it. On
+The desktop menu switches between Claude and Codex. On Android, tap a home-screen
+widget and select Claude or Codex in the card's header. On iOS, select the provider
+in the app. Each phone's ring, matrix and dash widgets follow that selection. On
 the watch, choose the provider on the Setup page; its tile, complications and
 notifications follow that selection. Pairing works for both providers with
 the same device token.
