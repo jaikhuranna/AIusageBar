@@ -6,7 +6,7 @@ Show Claude and Codex subscription usage on an iPhone's Home Screen and Lock Scr
 with the same faces as the Android widgets in `../android/`: how much of the
 5h session and the weekly limit is left, a countdown when one runs out, and a
 "GO!" when it comes back. The app exists for the widgets. It pairs with the
-desktop bridge (the Go app at the repo root), shows the details card, and has
+standalone Go server (`cmd/aiusage-server` at the repo root), shows the details card, and has
 a gallery of every widget.
 
 ## The widgets

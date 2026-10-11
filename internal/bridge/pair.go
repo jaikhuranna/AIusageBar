@@ -1,7 +1,7 @@
-// Client side of `aiusagebar -pair`: asks the already-running bridge on this
+// Client side of `aiusage-server -pair`: asks the already-running server on this
 // machine for a short-lived pairing code over the control socket and prints it,
 // so the code can be typed into the watch.
-package main
+package bridge
 
 import (
 	"encoding/json"
@@ -14,7 +14,7 @@ import (
 func fetchPairCode() (code string, expiresIn int, err error) {
 	resp, err := controlClient().Post("http://aiusagebar/pair/new", "application/json", strings.NewReader("{}"))
 	if err != nil {
-		return "", 0, fmt.Errorf("no bridge answering on %s - is aiusagebar running with -serve? (%w)", controlSocketPath(), err)
+		return "", 0, fmt.Errorf("no server answering on %s - is aiusage-server running? (%w)", controlSocketPath(), err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -36,7 +36,7 @@ func requestPairCode(addr string) error {
 		return err
 	}
 	fmt.Printf("Pairing code: %s\n", code)
-	fmt.Printf("Enter it on the watch within %d seconds. It works once.\n", expiresIn)
+	fmt.Printf("Enter it in a client within %d seconds. It works once.\n", expiresIn)
 	if port := portOf(addr); strings.HasPrefix(port, ":") {
 		for _, ip := range localIPs() {
 			fmt.Printf("  bridge: http://%s%s\n", ip, port)

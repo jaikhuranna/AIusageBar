@@ -4,70 +4,51 @@
 
 Make Claude Code and Codex usage visible at a glance, wherever you are.
 
-AIusageBar is a GNOME top-bar tray indicator (Go) that reads Anthropic's own
-cached plan-limit data and shows how much of the session (5h) and weekly (7d)
-allowance is gone, when each resets, and what the same token usage would have
-cost on pay-as-you-go API pricing. Codex quotas come from the official CLI
-app-server, with the same provider selection across clients. It also serves that snapshot as JSON — on the
-LAN, or from anywhere through a TLS tunnel (Tailscale Funnel or Cloudflare) — with pairing and alert
-events when a limit is about to bite. That bridge is the only data source for
-the Wear OS companion in `wearos/` (design rev 3), the Android home-screen
-widgets in `android/`, and the iOS widgets in `ios/`.
-
-The point is answering "can I start this long task right now?" without opening a
-terminal.
+AIusageBar has two independent Go programs. `aiusage-server` is the headless
+server: it reads provider usage, owns tokens and alert state, and serves the
+shared API. `aiusagebar` is a GNOME tray client, with the same HTTP boundary as
+the Android, Wear OS and iOS clients. Closing a client must never stop the server.
 
 ## Layout
 
-- `main.go` — pricing table, readers for `~/.claude.json` (plan limits) and
-  `~/.claude/projects/**/*.jsonl` (token usage → cost equivalent), tray UI.
-- `codex.go` — reads subscription quotas through the official Codex CLI
-  app-server (`account/rateLimits/read`), at most once a minute. Authentication
-  stays with the CLI; no inference or credential-file access.
-- `monitor.go` — **the single poll loop.** Samples every 30s, caches the
-  snapshot, evaluates alert thresholds, mints pairing codes. Tray and HTTP
-  handlers read its cache; nothing else calls `gather()`.
-- `server.go` — the `-serve` bridge: `/usage` (with ETag), `/events`, `/pair`,
-  `/healthz`, and the opt-in public `/share` (limits only, CORS, no token). The wire contract is the **Endpoints** table in `README.md`.
-- `refresh.go` — has the official `claude` CLI refresh the usage cache
-  when a client asks and it's stale. See the Freshness section in `README.md`.
-- `control.go` — the Unix control socket, the only place pairing codes are
-  minted (see gotchas).
-- `state.go` — what survives a restart: device tokens, the event ring, and the
-  per-threshold arming state, in `$XDG_STATE_HOME/aiusagebar/state.json` (0600).
-- `mdns.go` — `_aiusage._tcp` advertisement, shelled out to
-  `avahi-publish-service`.
-- `pair.go` — the `-pair` client that asks the running bridge for a code.
-- `monitor_test.go` — the alert state machine (fire once, hysteresis, re-arm on
-  window reset, survive restart) and the pairing rules.
-- `CLAUDE.local.md` — live deployment details (URL, ops). Gitignored.
-- `bridge_test.go` — the HTTP/socket security rules: no minting over TCP,
-  `-public-url` closes an unpaired bridge. `go test ./...`.
-- `scripts/setup-tunnel.sh` — one-shot Cloudflare Tunnel setup: its own
-  `~/.cloudflared/aiusage.yml`, a user systemd unit, autostart flags.
-- `aiusagebar.desktop` — autostart entry.
-- `docs/screenshots/` — README images (watch and Android widget). Crop them
-  to the app itself: no status bar, other widgets, or setup screens, since
-  those show the live URL and LAN address.
-- `wearos/` — the Wear OS watch app (Kotlin, its own Gradle build). It has its
-  own `CLAUDE.md` and `DESIGN.md`; start there for anything on the watch.
-- `android/` — the Android home-screen widgets (Kotlin, its own Gradle build).
-  Its `CLAUDE.md` covers the widgets, the Nothing look and releases. Some
-  files are copied from `wearos/`; keep them in step.
-- `ios/` — the same widgets for iPhone (Swift, WidgetKit, an XcodeGen
-  project). Its `CLAUDE.md` covers building on a Mac. `ios/Core/` ports
-  Android's pure rules; keep them in step too.
+- `cmd/aiusage-server/main.go` — server entry point and process cancellation.
+- `internal/bridge/` — server implementation and its tests:
+  - `sources.go` — Claude cache/transcript readers, pricing, collected snapshot.
+  - `codex.go` — official CLI app-server quota reader; no inference.
+  - `monitor.go` — one sampler, cached snapshots and the alert state machine.
+  - `server.go` — `/usage`, `/events`, `/pair`, `/healthz`, opt-in `/share`.
+  - `control.go`, `pair.go` — local socket minting for `aiusage-server -pair`.
+  - `state.go` — existing `$XDG_STATE_HOME/aiusagebar/state.json` (0600).
+  - `refresh.go`, `mdns.go` — source refresh and LAN discovery.
+- `internal/protocol/` — shared wire snapshot; no server or GUI dependencies.
+- `internal/client/` — HTTP client, provider caches, one-time-code pairing,
+  private tray config. Never reads provider/server files or starts their CLIs.
+- `internal/tray/`, root `main.go` — Linux tray renderer and client flags.
+  The tray stores only its device token/settings in the user config directory.
+- `deploy/aiusage-server.service` — independent user service example.
+- `aiusagebar.desktop` — tray-only desktop autostart entry.
+- `scripts/setup-tunnel.sh` — independent Cloudflare tunnel/server services.
+- `android/`, `wearos/`, `ios/` — companion clients, with their own `CLAUDE.md`.
+  Pure widget rules remain in step across Android/Wear and `ios/Core/`.
+- `docs/screenshots/` — app-only screenshots; exclude deployment URLs/addresses.
+- `CLAUDE.local.md` — gitignored live deployment details; never publish them.
 
 ## Build and run
 
 ```sh
-go build -o aiusagebar .          # needs Go 1.22+, gcc, GTK + AppIndicator headers
-./aiusagebar                      # tray only
-./aiusagebar -serve :8765         # tray + LAN JSON bridge
-./aiusagebar -headless -serve :8765 -token s3cr3t
-./aiusagebar -serve :8765 -public-url https://usage.example.com   # behind a tunnel
-./aiusagebar -pair                # print a pairing code for a watch
-go test ./...                     # no GTK needed
+CGO_ENABLED=0 go build -o aiusage-server ./cmd/aiusage-server
+./aiusage-server -serve :8765
+./aiusage-server -serve :8765 -public-url https://usage.example.com
+./aiusage-server -pair             # mint a client pairing code locally
+
+go build -o aiusagebar .           # tray needs gcc + GTK/AppIndicator headers
+./aiusagebar -server http://127.0.0.1:8765 -pair 123456
+./aiusagebar                       # HTTP-only tray client
+./aiusagebar -provider codex -check # one request without opening the tray
+
+CGO_ENABLED=0 go test ./internal/bridge ./internal/client ./internal/protocol
+go test -race ./...                # full tree; tray requires GTK headers
+python3 scripts/check-split.py ./aiusage-server ./aiusagebar  # isolated process integration
 ```
 
 ## Live deployment
@@ -84,13 +65,17 @@ When the deployment changes (URL, tunnel, flags, how it starts), update
 
 ## Conventions and gotchas
 
+- **Server/client separation is strict.** The server builds with CGO disabled and
+  never imports the tray. The tray imports the client/protocol packages only,
+  reads no server state and calls no provider CLIs. Keep pairing codes local to
+  the server; a tray is an ordinary paired HTTP client.
 - **Provider selection is additive.** `/usage`, `/events` and `/share` accept
   `provider=claude|codex`; omitted means Claude. Keep caches, ETags, alert
   arming and client comeback state isolated. Codex costs are unavailable.
   Honor `window_minutes`, `source_error` and `cache_fetched_at` on every client.
 - **Data sources are read-only and local.** Never write to `~/.claude.json` or
   the transcript files; they belong to Claude Code. To get fresher limits,
-  `refresh.go` runs the official CLI's local `/usage` command, which makes
+  `internal/bridge/refresh.go` runs the official CLI's local `/usage` command, which makes
   Claude Code fetch and rewrite its own cache. The bridge never calls
   Anthropic itself, and never uses the OAuth token (Consumer Terms).
 - **`GET /usage` is the refresh.** A stale cache (older than
@@ -113,7 +98,7 @@ When the deployment changes (URL, tunnel, flags, how it starts), update
   and hysteresis in `evaluateLocked` and nowhere else, or one crossing turns
   into two notifications that disagree.
 - **One sampler.** Adding a second caller of `gather()` means walking every
-  transcript twice. Read `monitor.latest()` / `latestRaw()` instead. The one
+  transcript twice. Server handlers read `monitor.latest()`; clients use the HTTP API. The one
   exception is `freshen()`, which resamples once right after a refresh so the
   waiting client gets the new numbers.
 - **The ETag excludes `generated_at` and `resets_in_sec`** on purpose, so an
@@ -122,7 +107,7 @@ When the deployment changes (URL, tunnel, flags, how it starts), update
 - **Pairing one device closes the bridge** to unauthenticated requests. That is
   intentional, and documented in `README.md`; don't "fix" it by falling back to
   open access.
-- Pricing in `priceFor` is hand-maintained per model; update the date noted in
+- Pricing in `internal/bridge/sources.go` (`priceFor`) is hand-maintained per model; update the date noted in
   `README.md` when it changes. Check each model's cache-read rate: it isn't
   always 0.1x input. T3 caches a LiteLLM price table at
   `~/.t3/userdata/usage-model-rates.json` that's handy for checking (read only).

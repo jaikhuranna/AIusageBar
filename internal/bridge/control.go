@@ -5,7 +5,7 @@
 // delivers internet traffic from 127.0.0.1, so "came from loopback" proves
 // nothing. A Unix socket in the user's runtime dir is reachable only by
 // processes running as this user, whatever sits in front of the TCP port.
-package main
+package bridge
 
 import (
 	"context"

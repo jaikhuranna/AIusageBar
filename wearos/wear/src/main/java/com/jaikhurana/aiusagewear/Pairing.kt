@@ -73,7 +73,7 @@ private fun ChooseBridge(onChosen: (String) -> Unit, onType: () -> Unit) {
         item { Text("Pair with your desktop", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center) }
         item {
             Text(
-                "In the tray menu, choose Pair a device…",
+                "On the server, run aiusage-server -pair",
                 color = GREY, fontSize = 12.sp, textAlign = TextAlign.Center,
             )
         }

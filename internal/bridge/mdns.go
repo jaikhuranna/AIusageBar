@@ -6,7 +6,7 @@
 // subprocess we can start and kill is less machinery than a second mDNS
 // responder fighting avahi for port 5353. If avahi isn't there, the bridge
 // still works - discovery just degrades to typing the host by hand.
-package main
+package bridge
 
 import (
 	"log"

@@ -1,12 +1,13 @@
 // monitor is the single sampler. One poll loop reads provider data, caches
-// the wire snapshot, and evaluates alert thresholds; the tray and every HTTP
-// handler read that cache instead of re-scanning the transcripts themselves.
+// the wire snapshot, and evaluates alert thresholds; every HTTP handler reads
+// that cache instead of re-scanning the transcripts themselves.
 //
 // It is also the single writer of alert events: clients render events, they
 // never derive them.
-package main
+package bridge
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -33,7 +34,6 @@ type monitor struct {
 	codex     *codexSource
 	codexSnap wireSnapshot
 	st        *state
-	raw       snapshot
 	snap      wireSnapshot
 	etag      string
 
@@ -55,12 +55,14 @@ type monitor struct {
 	// cache before a client is answered from it. See refresh.go.
 	refresh *refresher
 
-	onUpdate func() // optional: tray refresh, called outside the lock
-	started  time.Time
+	started time.Time
 }
 
 func newMonitor(thresholds []int, hysteresis int) *monitor {
+	initial := wireOf(snapshot{sourceError: "Waiting for the first server sample."})
 	return &monitor{
+		snap:       initial,
+		etag:       etagOf(initial),
 		st:         loadState(statePath()),
 		thresholds: thresholds,
 		hysteresis: hysteresis,
@@ -87,14 +89,19 @@ func parseThresholds(s string) []int {
 	return out
 }
 
-func (m *monitor) run() {
+func (m *monitor) run(ctx context.Context) {
 	m.poll()
 	m.pollCodex()
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
-	for range t.C {
-		m.poll()
-		m.pollCodex()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			m.poll()
+			m.pollCodex()
+		}
 	}
 }
 
@@ -103,7 +110,6 @@ func (m *monitor) poll() {
 	w := wireOf(s)
 
 	m.mu.Lock()
-	m.raw = s
 	m.snap = w
 	m.etag = etagOf(w)
 	fired := m.evaluateLocked(s, time.Now())
@@ -116,9 +122,6 @@ func (m *monitor) poll() {
 
 	for _, e := range fired {
 		log.Printf("event %s %s %s (%d%%)", e.ID, e.Kind, e.Window, e.Snapshot.Utilization)
-	}
-	if m.onUpdate != nil {
-		m.onUpdate()
 	}
 }
 
@@ -210,13 +213,6 @@ func (m *monitor) freshen() {
 	if m.refresh.ensureFresh() {
 		m.poll()
 	}
-}
-
-// latestRaw is the same sample the wire snapshot came from, for the tray.
-func (m *monitor) latestRaw() snapshot {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.raw
 }
 
 func (m *monitor) latest() (wireSnapshot, string) {
@@ -391,9 +387,6 @@ func (m *monitor) pollCodex() {
 		}
 	}
 	m.mu.Unlock()
-	if m.onUpdate != nil {
-		m.onUpdate()
-	}
 }
 
 func (m *monitor) latestFor(provider string) (wireSnapshot, string) {

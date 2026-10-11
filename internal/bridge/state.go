@@ -3,7 +3,7 @@
 //
 // Lives in $XDG_STATE_HOME/aiusagebar/state.json (0600 - it holds device
 // tokens). Everything here is plain data; the monitor owns the locking.
-package main
+package bridge
 
 import (
 	"encoding/json"

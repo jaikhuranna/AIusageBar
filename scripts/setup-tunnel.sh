@@ -13,7 +13,7 @@ NAME="${TUNNEL_NAME:-aiusage}"
 PORT="${PORT:-8765}"
 CF="$HOME/.cloudflared"
 CONF="$CF/aiusage.yml"
-BRIDGE="$(cd "$(dirname "$0")/.." && pwd)/aiusagebar"
+SERVER="$(cd "$(dirname "$0")/.." && pwd)/aiusage-server"
 
 if ! command -v cloudflared >/dev/null; then
     echo "cloudflared isn't installed. Install it, then re-run this script:"
@@ -74,21 +74,36 @@ systemctl --user daemon-reload
 systemctl --user enable --now aiusage-tunnel.service
 systemctl --user restart aiusage-tunnel.service
 
-# 6. Start the tray with the bridge on at every login.
-DESKTOP="$HOME/.config/autostart/aiusagebar.desktop"
-if [ -f "$DESKTOP" ]; then
-    cp "$DESKTOP" "$DESKTOP.bak"
-    sed -i "s|^Exec=.*|Exec=$BRIDGE -serve :$PORT -public-url https://$HOST|" "$DESKTOP"
-    echo "autostart updated (previous version saved as $DESKTOP.bak)"
-fi
+# 6. Run the server independently of the tray/client.
+SERVER_UNIT="$HOME/.config/systemd/user/aiusage-server.service"
+if [ -f "$SERVER_UNIT" ]; then cp "$SERVER_UNIT" "$SERVER_UNIT.bak"; fi
+cat > "$SERVER_UNIT" <<EOF
+[Unit]
+Description=AIusage standalone Go server
+After=network-online.target
+
+[Service]
+ExecStart=$SERVER -serve :$PORT -public-url https://$HOST
+Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
+systemctl --user enable aiusage-server.service
 
 cat <<EOF
 
-Done. Now restart AIusageBar with the bridge on:
-  1. Quit it from its tray menu (Quit).
-  2. Run:  $BRIDGE -serve :$PORT -public-url https://$HOST
-     (or log out and back in; autostart now does this)
+Tunnel configured. Stop any old combined AIusageBar process, then start:
+  systemctl --user restart aiusage-server.service
 
-Check from your phone on mobile data (not Wi-Fi):
-  https://$HOST/healthz   should show  "auth": "token"
+Pair and start the tray client separately:
+  $SERVER -serve :$PORT -pair
+  ./aiusagebar -server http://127.0.0.1:$PORT -pair <printed-code>
+  ./aiusagebar
+
+Check from your phone on mobile data:
+  https://$HOST/healthz   should show "auth": "token"
 EOF

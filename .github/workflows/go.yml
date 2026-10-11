@@ -1,0 +1,41 @@
+name: Go server and tray
+
+on:
+  push:
+    branches: [main]
+    paths: ['**/*.go', 'go.mod', 'go.sum', 'scripts/check-split.py', '.github/workflows/go.yml']
+  pull_request:
+    paths: ['**/*.go', 'go.mod', 'go.sum', 'scripts/check-split.py', '.github/workflows/go.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test without desktop dependencies
+        run: CGO_ENABLED=0 go test ./internal/bridge ./internal/client ./internal/protocol
+      - name: Build standalone server without CGO
+        run: CGO_ENABLED=0 go build -trimpath -o aiusage-server ./cmd/aiusage-server
+  tray:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install tray build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
+      - name: Test and build
+        run: |
+          go test -race ./...
+          go vet ./...
+          go build -trimpath -o aiusagebar .
+          CGO_ENABLED=0 go build -trimpath -o aiusage-server ./cmd/aiusage-server
+          python3 scripts/check-split.py ./aiusage-server ./aiusagebar

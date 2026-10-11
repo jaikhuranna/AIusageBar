@@ -5,8 +5,8 @@
 Show Claude and Codex subscription usage on an Android home screen, in Nothing OS's
 widget style: how much of the 5h session and the weekly limit is left, a
 countdown when one runs out, and a "GO!" when it comes back. It's the phone
-sibling of the Wear OS app in `../wearos/`, and reads the same desktop bridge
-(the Go app at the repo root) the same way.
+sibling of the Wear OS app in `../wearos/`, and reads the same standalone Go server
+(`cmd/aiusage-server` at the repo root) the same way.
 
 The widget tap card's header selects Claude or Codex and updates every widget.
 The setup/gallery app shows the current provider but does not have a selector. Codex

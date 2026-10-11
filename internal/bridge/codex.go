@@ -1,4 +1,4 @@
-package main
+package bridge
 
 import (
 	"bufio"
@@ -47,7 +47,7 @@ func (c *codexSource) sample() snapshot {
 	if err != nil {
 		// Never log CLI output: upstream errors may include account details.
 		c.cached.provider = "codex"
-		c.cached.sourceError = "Codex unavailable. Install the Codex CLI and sign in with ChatGPT on the desktop, then refresh."
+		c.cached.sourceError = "Codex unavailable. Install the Codex CLI and sign in with ChatGPT on the server, then refresh."
 	} else {
 		s.provider = "codex"
 		s.cacheFetchedAt = time.Now()

@@ -10,7 +10,7 @@ struct PairingView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Pair with your desktop").font(.title2.bold())
-            Text("On the desktop, choose Pair a device… in the AIusageBar tray menu (or run aiusagebar -pair).")
+            Text("On the server machine, run aiusage-server -pair to get a code.")
                 .font(.callout)
             if let target {
                 CodeEntry(base: target) { self.target = nil }

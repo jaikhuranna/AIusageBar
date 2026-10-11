@@ -8,7 +8,7 @@
 // Anthropic: the official client does the fetching, on its own credentials.
 //
 // minAge is the floor on how often that can happen, however many clients ask.
-package main
+package bridge
 
 import (
 	"context"

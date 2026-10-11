@@ -11,8 +11,8 @@ android {
         applicationId = "com.jaikhurana.aiusagewidget"
         minSdk = 31 // Material You system colors, which the Nothing widget look is built on
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.4.1"
+        versionCode = 11
+        versionName = "0.5.0"
     }
 
     buildTypes {

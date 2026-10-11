@@ -50,7 +50,7 @@ fun PairingScreen() {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Pair with your desktop", style = MaterialTheme.typography.headlineSmall)
         Text(
-            "On the desktop, choose Pair a device… in the AIusageBar tray menu (or run aiusagebar -pair).",
+            "On the server machine, run aiusage-server -pair to get a code.",
             style = MaterialTheme.typography.bodyMedium,
         )
         if (target == null) ChooseBridge(onChosen = { target = it }) else CodeEntry(target!!, onBack = { target = null })

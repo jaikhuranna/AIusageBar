@@ -1,11 +1,20 @@
 # AIusageBar
 
-GNOME top-bar indicator for [Claude Code](https://claude.com/claude-code) and [Codex](https://developers.openai.com/codex/) subscription usage. Written in Go.
+A Go usage server and clients for [Claude Code](https://claude.com/claude-code) and [Codex](https://developers.openai.com/codex/) subscription usage.
 
-The same numbers reach your wrist and your phone through the bridge
-(`-serve`): a Wear OS app lives in [`wearos/`](wearos/), Android
-home-screen widgets in [`android/`](android/), and the same widgets for
-iPhone in [`ios/`](ios/).
+`aiusage-server` collects usage, owns pairing and alerts, and serves the JSON API.
+It runs without a desktop or GTK. `aiusagebar` is the Linux GNOME tray client;
+like the [Wear OS app](wearos/), [Android widgets](android/) and [iOS widgets](ios/),
+it reads the server over HTTP. Closing any client leaves the server running.
+
+```mermaid
+flowchart LR
+    Sources[Local provider CLIs and usage caches] --> Server[Go usage server]
+    Server --> Linux[Linux tray client]
+    Server --> Android[Android app and widgets]
+    Server --> Watch[Wear OS]
+    Server --> iOS[iOS app and widgets]
+```
 
 | Wear OS: session | Wear OS: week |
 | :---: | :---: |
@@ -33,8 +42,8 @@ iPhone in [`ios/`](ios/).
     prices every cache write at the 5-minute 1.25x rate, so it shows a little
     less for the same usage.
 - Refreshes every 30s, or on demand via the "Refresh" menu item.
-- Can also serve the same numbers over your LAN (`-serve`) as JSON, for other
-  devices on the network.
+- The independent server serves these numbers to every client over the same API.
+  The tray shows connection/source freshness and retains visibly stale values when offline.
 
 Subscription plans (Pro/Max) don't expose a dollar limit or a metered
 balance - only a percentage of your session/weekly allowance. The cost
@@ -44,11 +53,16 @@ being billed.
 ## Build
 
 ```sh
-go build -o aiusagebar .
+CGO_ENABLED=0 go build -o aiusage-server ./cmd/aiusage-server  # Go only; no GTK
+go build -o aiusagebar .                                    # Linux tray client
 ```
 
-Needs Go 1.22+, a C compiler (`gcc`), and GTK/AppIndicator dev headers for
-the tray (same class of dependency the old GTK version needed):
+Run `go test -race ./...` for the Go checks, and
+`python3 scripts/check-split.py ./aiusage-server ./aiusagebar` for isolated
+pairing and restart checks with fake provider sources.
+
+The server needs Go 1.22+ only. The tray additionally needs a C compiler (`gcc`)
+and GTK/AppIndicator development headers:
 
 ```sh
 sudo apt install build-essential libgtk-3-dev libayatana-appindicator3-dev
@@ -84,39 +98,67 @@ Choose the Home Screen's **Clear** appearance for WidgetKit's Liquid Glass
 widget background; tinted and Lock Screen appearances are also supported.
 Select Claude or Codex in the app; all its widgets follow that selection.
 
-## Run
+## Run the server and tray
+
+Start the server on the machine where the provider CLIs are signed in:
 
 ```sh
+./aiusage-server -serve :8765
+```
+
+Pair the Linux tray just like another device. On the server machine, mint a code:
+
+```sh
+./aiusage-server -pair
+```
+
+Then configure the tray using that code (replace the example):
+
+```sh
+./aiusagebar -server http://127.0.0.1:8765 -pair 123456
 ./aiusagebar
 ```
 
+For a server on another machine, use its private LAN IP or public HTTPS URL.
+The tray stores its own device token and chosen provider in
+`$XDG_CONFIG_HOME/aiusagebar/client.json` (default `~/.config/aiusagebar/client.json`,
+mode 0600). It never reads provider credentials, transcripts, or server state.
+Changing `-server` clears the old token; pair with the new server before using it.
+`-provider claude|codex` sets the initial provider; the tray menu also switches it.
+`-check` fetches one JSON snapshot without opening the tray, useful for diagnostics.
+`-config /path/to/client.json` selects a different client configuration.
+
 ## Serve usage over the LAN
 
-The same snapshot the tray shows can be served as JSON, so anything else on the
-network can read it - that's how the Wear OS companion
-([`wearos/`](wearos/)) and the Android and iOS widgets
-([`android/`](android/), [`ios/`](ios/)) get their numbers:
+The standalone server supports the existing phone/watch API and flags:
 
 ```sh
-./aiusagebar -serve :8765              # tray + JSON bridge
-./aiusagebar -headless -serve :8765    # bridge only, no tray
-./aiusagebar -serve :8765 -token s3cr3t  # require a shared secret
+./aiusage-server -serve :8765
+./aiusage-server -serve :8765 -token s3cr3t  # optional shared secret
 ```
 
-On startup the process logs every LAN address it is reachable on, and advertises
-itself over mDNS as `_aiusage._tcp` (via `avahi-publish-service`) so a client can
-find it without anyone typing an IP address. `-mdns=false` turns that off.
+The server advertises `_aiusage._tcp` over mDNS through `avahi-publish-service`
+when available. `-mdns=false` disables LAN discovery.
+
+The server retains `$XDG_STATE_HOME/aiusagebar/state.json` and the local
+`aiusagebar.sock` control socket, so existing mobile tokens, alert history and
+pairing behavior survive the split. The tray's token is a separate device entry.
+
+To upgrade from the combined binary, stop that process, start `aiusage-server`
+with its previous server flags, then pair and start the new `aiusagebar` client.
+The tray no longer accepts `-serve`, `-headless`, server refresh settings, or
+server pairing-code creation; those responsibilities belong to `aiusage-server`.
 
 ### Codex
 
-Install the official Codex CLI on the desktop and sign in with your ChatGPT
+Install the official Codex CLI on the server machine and sign in with your ChatGPT
 account using `codex login`. The bridge uses that CLI's existing login via
 [`account/rateLimits/read`](https://developers.openai.com/codex/app-server/),
 without opening a thread or making a model request. API-key-only accounts do
 not supply subscription quota windows through this method.
 
 ```sh
-./aiusagebar -serve :8765 -codex /path/to/codex  # optional; PATH or ~/.local/bin/codex by default
+./aiusage-server -serve :8765 -codex /path/to/codex  # optional; PATH or ~/.local/bin/codex by default
 ```
 
 The desktop menu switches between Claude and Codex. On Android, tap a home-screen
@@ -185,9 +227,9 @@ separate refresh endpoint.
 of the numbers. The bridge never talks to Anthropic itself.
 
 ```sh
-./aiusagebar -serve :8765 -refresh-min-age 5m     # refresh less eagerly
-./aiusagebar -serve :8765 -refresh-min-age 0      # never; serve the cache as Claude Code leaves it
-./aiusagebar -serve :8765 -claude /opt/bin/claude # if claude isn't on PATH or in ~/.local/bin
+./aiusage-server -serve :8765 -refresh-min-age 5m     # refresh less eagerly
+./aiusage-server -serve :8765 -refresh-min-age 0      # never; serve the cache as Claude Code leaves it
+./aiusage-server -serve :8765 -claude /opt/bin/claude # if claude isn't on PATH or in ~/.local/bin
 ```
 
 Claude's `resets_at` is rounded to the minute: Anthropic's value wobbles by a second
@@ -204,7 +246,7 @@ the line, and the arming state is persisted, so restarting the bridge doesn't
 replay history.
 
 ```sh
-./aiusagebar -serve :8765 -thresholds 80,95,100 -hysteresis 5
+./aiusage-server -serve :8765 -thresholds 80,95,100 -hysteresis 5
 ```
 
 Cost is deliberately not alertable - it's an independent estimate of value, not
@@ -216,10 +258,10 @@ happening.
 Typing a 32-character token on a watch is not a plan. Instead:
 
 ```sh
-./aiusagebar -pair          # asks the running bridge for a code, prints it
+./aiusage-server -pair       # asks the running bridge for a code, prints it
 ```
 
-(or click **Pair a device…** in the tray menu). The bridge prints a 6-digit
+The server prints a 6-digit
 code, good for one use and two minutes; the device posts it to `/pair` and gets
 back its own token. Ten wrong codes in a row burn every pending code, so the
 6-digit space can't be walked.
@@ -254,7 +296,7 @@ or your tailnet, and clients don't need Tailscale installed.
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
 sudo tailscale funnel --bg 8765      # prints the public URL; persists across reboots
-./aiusagebar -serve :8765 -public-url https://<machine>.<tailnet>.ts.net
+./aiusage-server -serve :8765 -public-url https://<machine>.<tailnet>.ts.net
 ```
 
 `sudo tailscale funnel reset` turns it off. Funnel forwards every path, which
@@ -270,8 +312,7 @@ bridge on loopback. It needs a Cloudflare account and a domain on it. The free
 restart, and the watch needs one that stays put.
 
 The quick way, which does everything below (login, tunnel, DNS, a config that
-only forwards the bridge's routes, a user-level systemd service, and autostart
-flags):
+only forwards the bridge's routes, a user-level systemd service, and server service):
 
 ```sh
 scripts/setup-tunnel.sh usage.example.com
@@ -302,7 +343,7 @@ Then run both:
 
 ```sh
 cloudflared tunnel run aiusage
-./aiusagebar -serve :8765 -public-url https://usage.example.com
+./aiusage-server -serve :8765 -public-url https://usage.example.com
 ```
 
 `-public-url` does two things:
@@ -335,8 +376,8 @@ because a client pairs once and sends the token from then on.
 weekly allowance, for a personal site, a status page, a README badge service.
 
 ```sh
-./aiusagebar -serve :8765 -public-url https://usage.example.com -share https://you.example
-./aiusagebar -serve :8765 -public-url https://usage.example.com -share '*'   # any site
+./aiusage-server -serve :8765 -public-url https://usage.example.com -share https://you.example
+./aiusage-server -serve :8765 -public-url https://usage.example.com -share '*'   # any site
 ```
 
 ```sh
@@ -378,7 +419,7 @@ Anything can read the bridge, not just the watch. Here's the whole integration:
 
 1. **Find it.** On the LAN, browse mDNS for `_aiusage._tcp`, or use the
    host's address on port 8765. From anywhere, use the public URL.
-2. **Pair once.** Run `aiusagebar -pair` (or use **Pair a device…** in the tray)
+2. **Pair once.** Run `aiusage-server -pair` on the server machine
    to get a 6-digit code, then:
    ```sh
    curl -X POST https://<public-url>/pair -d '{"code":"123456","name":"my-thing"}'
@@ -414,11 +455,31 @@ any noncommercial purpose: personal use, research, hobby projects, and
 charitable, educational or public-interest organisations. Commercial use needs
 permission from the copyright holder.
 
-## Start on login
+## Run independently at login
+
+Install the server and enable its user service:
 
 ```sh
+mkdir -p ~/.local/bin ~/.config/systemd/user
+install -m 755 aiusage-server ~/.local/bin/aiusage-server
+cp deploy/aiusage-server.service ~/.config/systemd/user/
+# Before starting, edit ExecStart for any public-tunnel/provider-path flags.
+systemctl --user daemon-reload
+systemctl --user enable --now aiusage-server.service
+```
+
+Set `-public-url` before starting the service if a public tunnel forwards to it.
+Keep deployment URLs and tokens in your local configuration, outside this repository.
+`journalctl --user -u aiusage-server.service` shows server logs; restarting the
+tray has no effect on that service. To keep the server running after logout,
+enable user lingering with `loginctl enable-linger "$USER"` if desired.
+
+After pairing the tray, install its autostart entry:
+
+```sh
+mkdir -p ~/.config/autostart
 cp aiusagebar.desktop ~/.config/autostart/
 ```
 
-(Edit the `Exec=` path in `aiusagebar.desktop` first if you build/install the
-binary somewhere other than this directory.)
+Edit the desktop entry's `Exec=` to the installed tray binary's absolute path.
+It should launch only `aiusagebar`, with no old server flags.

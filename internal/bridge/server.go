@@ -2,10 +2,13 @@
 // pairing, so other devices (the Wear OS app in wearos/) can read the
 // same numbers the tray shows, on the LAN or through a tunnel. The wire
 // contract is the "Endpoints" table in README.md.
-package main
+package bridge
 
 import (
+	"aiusagebar/internal/protocol"
+	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -15,32 +18,8 @@ import (
 	"time"
 )
 
-// wireWindow is one plan-limit window as sent over the wire. Remaining is
-// included so clients don't have to know the 100-utilization convention.
-type wireWindow struct {
-	WindowMinutes int    `json:"window_minutes,omitempty"`
-	Utilization   int    `json:"utilization"`
-	Remaining     int    `json:"remaining"`
-	ResetsAt      string `json:"resets_at,omitempty"`
-	ResetsInSec   int64  `json:"resets_in_sec"`
-}
-
-type wireSnapshot struct {
-	Provider      string      `json:"provider"`
-	SourceError   string      `json:"source_error,omitempty"`
-	CostAvailable bool        `json:"cost_available"`
-	Schema        int         `json:"schema"`
-	FiveHour      *wireWindow `json:"five_hour"`
-	SevenDay      *wireWindow `json:"seven_day"`
-	CostToday     float64     `json:"cost_today"`
-	CostSession   float64     `json:"cost_session"`
-	CostWeek      float64     `json:"cost_week"`
-	GeneratedAt   string      `json:"generated_at"`
-	// CacheFetchedAt is when Claude Code last fetched these limits: the real
-	// age of the numbers, as opposed to when the bridge re-read them.
-	CacheFetchedAt string `json:"cache_fetched_at,omitempty"`
-	Host           string `json:"host"`
-}
+type wireWindow = protocol.Window
+type wireSnapshot = protocol.Snapshot
 
 func toWire(w *limitWindow) *wireWindow {
 	if w == nil {
@@ -89,7 +68,7 @@ func wireOf(s snapshot) wireSnapshot {
 
 // serve runs the JSON bridge until the process exits. token, when non-empty, is
 // a shared secret; per-device tokens handed out by /pair are always accepted.
-func serve(addr, token string, m *monitor) error {
+func serve(ctx context.Context, addr, token string, m *monitor) error {
 	log.Printf("serving usage JSON on http://%s/usage", addr)
 	if listensEverywhere(addr) {
 		for _, ip := range localIPs() {
@@ -103,9 +82,15 @@ func serve(addr, token string, m *monitor) error {
 		Addr:         addr,
 		Handler:      newMux(token, m),
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 45 * time.Second,
 	}
-	return srv.ListenAndServe()
+	stop := context.AfterFunc(ctx, func() { _ = srv.Close() })
+	defer stop()
+	err := srv.ListenAndServe()
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
 }
 
 // newMux holds every TCP route. Minting pairing codes is deliberately absent:

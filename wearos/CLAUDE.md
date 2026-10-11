@@ -5,7 +5,7 @@
 Show Claude and Codex subscription usage on a Wear OS watch (Galaxy Watch): how much of
 the session (5h) and weekly (7d) plan limit is left, when each resets, and, when
 a limit hits 0, a countdown on the wrist to when it comes back. It works from
-anywhere the watch has connectivity, as long as the desktop is on.
+anywhere the watch has connectivity, as long as the server is running.
 
 The Setup page selects the provider. Tiles, complications and alerts follow
 that choice. Clear comeback alarms and event cursors when switching; the first
@@ -14,7 +14,7 @@ events page for the new provider is history. Codex cost estimates are unavailabl
 ## Status
 
 `DESIGN.md` (rev 3) is the plan. M0 (bridge hardening) lives in
-the repo root, the desktop tray whose bridge is this app's only data source.
+`../internal/bridge/`, the standalone Go server that is this app's only data source.
 M1–M5 are **built**: `wear/` compiles, and it passes its unit tests and lint.
 It also installs and registers its tile and complication on a Wear OS 6
 emulator. It has **not been run on a real watch yet**, so the M1–M5 exit
@@ -81,7 +81,7 @@ Lint's "newer version available" warnings are expected.
   `adb -s <watch> exec-out screencap -p > wearos/screenshots/<name>.png`.
   README shots can come from the `claudewear` emulator instead: run a
   throwaway bridge (`XDG_STATE_HOME=/tmp/x XDG_RUNTIME_DIR=/tmp/x
-  ./aiusagebar -headless -serve 127.0.0.1:8799 -mdns=false`) so the live
+  ./aiusage-server -serve 127.0.0.1:8799 -mdns=false`) so the live
   device list is untouched, and pair at `http://10.0.2.2:8799`. `adb shell
   input text` doesn't survive the Wear keyboard's confirm, so run
   `ime disable` on the keyboard while typing, then `ime enable` it again.

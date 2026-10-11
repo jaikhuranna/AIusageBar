@@ -1,0 +1,12 @@
+[Unit]
+Description=AIusage standalone Go usage server
+After=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/aiusage-server -serve :8765
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

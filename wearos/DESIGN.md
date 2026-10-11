@@ -68,8 +68,8 @@ The watch app is `standalone=true`.
 1. **First run, at home on Wi-Fi.** The watch uses `NsdManager` to discover
    `_aiusage._tcp` and shows the bridges it found. You pick one, with nothing
    typed.
-2. **Enter the 6-digit code** from the tray's **Pair a device…** menu item (or
-   `aiusagebar -pair`). The watch sends it with `POST /pair` over the LAN.
+2. **Enter the 6-digit code** from `aiusage-server -pair` on
+   the server machine. The watch sends it with `POST /pair` over the LAN.
 3. **The response carries a per-device `token` and the `public_url`.** The
    watch stores both in app-private storage, with backup and device-to-device
    transfer excluded, and uses the public URL from then on, everywhere.
