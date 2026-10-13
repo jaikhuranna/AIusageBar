@@ -76,8 +76,9 @@ cd wearos  && ./gradlew :wear:assembleRelease   # wear/build/outputs/apk/release
 cd android && ./gradlew :app:assembleRelease    # app/build/outputs/apk/release/
 ```
 
-The phone app has four widgets (a 1x1 and a 2x2 ring, a 2x2 dot matrix, a
-4x2 dashboard) in Nothing OS's style; tapping one opens a card with both
+The phone app has five widgets (a 1x1 and a 2x2 ring, a 2x2 dot matrix, a
+4x2 dashboard, and a 4x1 of Claude's and Codex's weekly limits as two twisted
+threads) in Nothing OS's style; tapping one opens a card with both
 limits and a refresh.
 
 Or skip the build: the phone app's APK is attached to each `widget-v*` release

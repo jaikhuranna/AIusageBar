@@ -53,8 +53,10 @@ object Sync {
                     val recent = store.lastError == null && now - store.fetchedAt < MANUAL_THROTTLE_MS
                     if (force || !(manual && recent)) fetch(store, bases, token, now)
                     store.snapshot()?.let { Plan.comeback(it, Instant.now()) }?.let { store.backAt = it.toEpochMilli() }
-                    // Redraw as soon as the provider on screen has its answer.
+                    // Redraw as soon as the provider on screen has its answer. The
+                    // threads show both, so they redraw on either.
                     if (provider == store.selected) Widgets.refreshAll(ctx)
+                    else Widgets.refreshAll(ctx, Widgets.ALL.filter { it.style == Style.THREAD })
                 }
             }.awaitAll()
         }

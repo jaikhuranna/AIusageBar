@@ -16,7 +16,7 @@ import java.time.Instant
 import kotlin.math.min
 import kotlin.math.sqrt
 
-/** The four widgets. Each is only a style and a layout; the drawing is shared. */
+/** The five widgets. Each is only a style and a layout; the drawing is shared. */
 abstract class UsageWidget(val style: Style, val layout: Int) : AppWidgetProvider() {
     override fun onUpdate(ctx: Context, mgr: AppWidgetManager, ids: IntArray) {
         val look = Widgets.look(ctx)
@@ -38,9 +38,11 @@ class RingWidget : UsageWidget(Style.RING, R.layout.widget_glyph)
 class RingLargeWidget : UsageWidget(Style.RING, R.layout.widget_glyph)
 class MatrixWidget : UsageWidget(Style.MATRIX, R.layout.widget_card)
 class DashWidget : UsageWidget(Style.DASH, R.layout.widget_card)
+/** Both providers at once, whichever the others show. */
+class ThreadWidget : UsageWidget(Style.THREAD, R.layout.widget_card)
 
 object Widgets {
-    val ALL: List<UsageWidget> = listOf(RingWidget(), RingLargeWidget(), MatrixWidget(), DashWidget())
+    val ALL: List<UsageWidget> = listOf(RingWidget(), RingLargeWidget(), MatrixWidget(), DashWidget(), ThreadWidget())
 
     /** A bitmap layer's budget; RemoteViews refuse very large parcels. */
     private const val MAX_LAYER_BYTES = 3_000_000f
@@ -50,10 +52,10 @@ object Widgets {
         return Look.of(s.paired, s.snapshot(), s.fetchedAt, s.lastError, s.backAt, now).copy(provider = s.provider)
     }
 
-    fun refreshAll(ctx: Context) {
+    fun refreshAll(ctx: Context, only: List<UsageWidget> = ALL) {
         val mgr = AppWidgetManager.getInstance(ctx)
         val look = look(ctx)
-        for (w in ALL) mgr.getAppWidgetIds(ComponentName(ctx, w.javaClass)).forEach { render(ctx, mgr, it, w, look) }
+        for (w in only) mgr.getAppWidgetIds(ComponentName(ctx, w.javaClass)).forEach { render(ctx, mgr, it, w, look) }
         Ticker.arm(ctx, look)
     }
 
@@ -64,11 +66,11 @@ object Widgets {
 
     fun render(ctx: Context, mgr: AppWidgetManager, id: Int, w: UsageWidget, look: Look) {
         val (wPx, hPx) = sizePx(ctx, mgr.getAppWidgetOptions(id), w.style)
-        val layers = Render.draw(ctx, w.style, look, wPx, hPx)
+        val layers = if (w.style == Style.THREAD) threads(ctx, wPx, hPx) else Render.draw(ctx, w.style, look, wPx, hPx)
         val rv = RemoteViews(ctx.packageName, w.layout).apply {
             setImageViewBitmap(R.id.ink, layers.ink)
             setImageViewBitmap(R.id.accent, layers.accent)
-            setContentDescription(R.id.accent, describe(look))
+            setContentDescription(R.id.accent, if (w.style == Style.THREAD) describeWeeks(ctx) else describe(look))
             // Paired, a tap opens the card (and refreshes); unpaired, it opens pairing.
             val tap = if (look.mode == Mode.UNPAIRED) openApp(ctx) else openCard(ctx)
             setOnClickPendingIntent(if (w.layout == R.layout.widget_glyph) R.id.root else android.R.id.background, tap)
@@ -82,12 +84,20 @@ object Widgets {
         var wDp = (if (portrait) o.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH) else o.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH)).toFloat()
         var hDp = (if (portrait) o.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT) else o.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT)).toFloat()
         if (wDp <= 0f || hDp <= 0f) {
-            wDp = if (style == Style.DASH) 320f else 160f
-            hDp = 160f
+            wDp = if (style == Style.DASH || style == Style.THREAD) 320f else 160f
+            hDp = if (style == Style.THREAD) 70f else 160f
         }
         val density = ctx.resources.displayMetrics.density
         val scale = min(density, sqrt(MAX_LAYER_BYTES / 4f / (wDp * hDp)))
         return (wDp * scale).toInt() to (hDp * scale).toInt()
+    }
+
+    private fun threads(ctx: Context, w: Int, h: Int) =
+        Render.threads(look(ctx, provider = UsageProvider.CLAUDE), look(ctx, provider = UsageProvider.CODEX), w, h)
+
+    private fun describeWeeks(ctx: Context): String = UsageProvider.entries.joinToString(", ", "Weekly allowance left: ", ". Tap for details.") { p ->
+        val l = look(ctx, provider = p)
+        "${p.title} " + if (l.week == null || l.mode == Mode.UNPAIRED || l.mode == Mode.WAITING) "unknown" else "${l.weekLeft}%"
     }
 
     private fun describe(l: Look): String = when (l.mode) {

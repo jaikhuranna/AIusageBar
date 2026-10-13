@@ -11,6 +11,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -49,10 +51,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
@@ -252,6 +256,27 @@ fun Providers(onSelect: (UsageProvider) -> Unit) {
             val store = remember(changes, minute, provider) { Store(ctx, provider) }
             val look = remember(changes, minute, provider) { Widgets.look(ctx, provider = provider) }
             ProviderBlock(look, store, provider == selected, fg) { onSelect(provider) }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(fg.copy(alpha = 0.1f)))
+        val claude = remember(changes, minute) { Widgets.look(ctx, provider = UsageProvider.CLAUDE) }
+        val codex = remember(changes, minute) { Widgets.look(ctx, provider = UsageProvider.CODEX) }
+        Threads(claude, codex, fg)
+    }
+}
+
+/** Both weeks as the 4x1 draws them, twisted together. */
+@Composable
+private fun Threads(claude: Look, codex: Look, fg: Color) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row {
+            Label("${claude.weekLabel} · BOTH", fg, 0.9f)
+            Spacer(Modifier.weight(1f))
+            Label("FAINT = USED", fg, 0.4f, size = 10.sp)
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth().height(44.dp)) {
+            val px = with(LocalDensity.current) { constraints.maxWidth to 44.dp.roundToPx() }
+            val layers = remember(claude, codex, px) { Render.threads(claude, codex, px.first, px.second) }
+            Image(layers.accent.asImageBitmap(), "Weekly left: Claude ${claude.weekLeft}%, Codex ${codex.weekLeft}%", Modifier.fillMaxSize())
         }
     }
 }

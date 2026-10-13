@@ -16,7 +16,7 @@ Every sync fetches both providers in parallel into separate caches
 (`Store(ctx, provider)`, keys suffixed `_claude` / `_codex`), so switching is
 only a redraw: never gate it on a refresh, and never clear a cache on switch.
 
-## The four widgets
+## The five widgets
 
 | Widget | Size | Look |
 | --- | --- | --- |
@@ -24,8 +24,16 @@ only a redraw: never gate it on a refresh, and never clear a cache on switch.
 | Claude ring, large | 2x2 | The same face, bigger. |
 | Claude matrix | 2x2 | An LED dot panel: the session's % left set in type in a window cut out of the dots, small dot labels (5h reset in the corner), the week as a dot bar. |
 | Claude dash | 4x2 | The most urgent number on the left; both windows on the right as dot bars with a "time left" tick, reset times, and a pace estimate ("LASTS" / "EMPTY IN ~1H"). |
+| AI threads | 4x1 (resizes to 5x1) | Both providers' weekly limits as two threads twisted round each other, left to right: Claude orange, Codex green. Each is bright for the share of its week left and faint (not gone) where it's been used. No figures: a low, long wave, so the crossings are few and shallow (about 28°). The card ends with the same threads. |
 
-States, shared by all four (`Mode` in `Look.kt`, highest priority first):
+The threads ignore the "Show on widgets" pick and the session states: they
+only draw each provider's week (unknown or out is all faint), dimmed when
+that provider is stale. Crossings alternate over and under: each slice of
+`ThreadFace` draws the lower thread, clears a gap around the upper one, then
+draws the upper one, clipped on whole pixels so slices tile without seams.
+Bright and faint are separate butt-ended paths, so they meet square to the thread.
+
+States, shared by the other four (`Mode` in `Look.kt`, highest priority first):
 
 - **UNPAIRED / WAITING** — "PAIR" or "...".
 - **WEEK_OUT** — everything grey, counting down to the weekly reset. The ring
@@ -57,8 +65,10 @@ States, shared by all four (`Mode` in `Look.kt`, highest priority first):
     change here should land there too.
   - `DotFont.kt` — a hand-made 5×7 dot-matrix face (Ndot-like, no font
     file). Small accents only; see Typography.
-  - `Render.kt` — the three faces (`RingFace`, `MatrixFace`, `DashFace`).
-  - `Widgets.kt` — the four `AppWidgetProvider`s, sizing, and `Ticker`
+  - `Render.kt` — the four faces (`RingFace`, `MatrixFace`, `DashFace`,
+    `ThreadFace`). `ThreadFace` takes both providers' looks, so `Sync`
+    redraws the threads when either provider answers.
+  - `Widgets.kt` — the five `AppWidgetProvider`s, sizing, and `Ticker`
     (redraws each minute during a countdown, every 5 min otherwise, never
     waking the phone).
   - `CardActivity.kt` — what a widget tap opens once paired: a Nothing-style
@@ -70,7 +80,7 @@ States, shared by all four (`Mode` in `Look.kt`, highest priority first):
     that launches an activity directly gets the launcher's widget-to-window
     morph, which drew a stretched box behind the card on Nothing Launcher.
   - `MainActivity.kt`, `Pairing.kt` — pairing (NSD + 6-digit code, like the
-    watch), the same `Providers` panel as the card, and a gallery: the four
+    watch), the same `Providers` panel as the card, and a gallery: the five
     widgets with live numbers, or any state picked from the chips above them.
     Tapping one pins it. Unpair sits in the footer behind a confirmation. The
     app uses the widget colours (`app_bg` page, `widget_bg` cards) and the
@@ -120,13 +130,19 @@ compileSdk 37). Several emulators and the watch are often on adb; always
 pass `-s`. `emulator-5554` is a phone running Nothing Launcher, good for
 checking the widgets.
 
+**Every APK Jai should check on the phone also gets served to Jai**, on the
+home network and the tailnet, per the "Local servers" rule in the global
+`~/.claude/CLAUDE.md`: put only the APK in a fresh directory, serve that
+directory (not port 8765), and give both clickable links after checking they
+answer. The addresses belong in `../CLAUDE.local.md`, never in this file.
+
 Releases: bump `versionCode`/`versionName` in `app/build.gradle.kts`, build
 the release APK, and attach it as `AIusageWidget-<version>.apk` with
 `gh release create widget-v<version> <apk>` (prefixed, since the repo's tags
 are shared with the tray and the watch). The APK is signed with the local debug
 key, so an update installs over the old one only from this machine's builds.
 
-Widget-picker previews for the matrix and dash
+Widget-picker previews for the matrix, dash and threads
 (`res/drawable-nodpi/preview_*.png`) are crops of the app's own gallery
 screenshots. Re-take them if those faces change.
 

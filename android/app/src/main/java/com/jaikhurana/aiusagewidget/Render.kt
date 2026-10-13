@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
@@ -14,6 +15,7 @@ import androidx.core.graphics.createBitmap
 import java.time.Duration
 import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -31,7 +33,7 @@ class Layers(val w: Int, val h: Int) {
     val accCanvas = Canvas(accent)
 }
 
-enum class Style { RING, MATRIX, DASH }
+enum class Style { RING, MATRIX, DASH, THREAD }
 
 object Render {
     fun accent(look: Look): Int = accent(look.provider)
@@ -42,17 +44,29 @@ object Render {
     /** Stale data keeps its shape but loses its color. */
     private const val STALE_ALPHA = 115
 
-    fun draw(ctx: Context, style: Style, look: Look, w: Int, h: Int): Layers {
+    /** [other] is the second provider's look, which only [Style.THREAD] draws. */
+    fun draw(ctx: Context, style: Style, look: Look, w: Int, h: Int, other: Look? = null): Layers {
+        if (style == Style.THREAD) {
+            val both = listOfNotNull(look, other)
+            val claude = both.firstOrNull { it.provider == UsageProvider.CLAUDE } ?: look
+            val codex = both.firstOrNull { it.provider == UsageProvider.CODEX } ?: look
+            return threads(claude, codex, w, h)
+        }
         val l = Layers(w.coerceAtLeast(1), h.coerceAtLeast(1))
         if (look.stale) l.accCanvas.saveLayerAlpha(null, STALE_ALPHA)
         when (style) {
             Style.RING -> RingFace.draw(look, l)
             Style.MATRIX -> MatrixFace.draw(look, l)
             Style.DASH -> DashFace.draw(ctx, look, l)
+            Style.THREAD -> {}
         }
         if (look.stale) l.accCanvas.restore()
         return l
     }
+
+    /** Both weekly limits as two twisted threads. */
+    fun threads(claude: Look, codex: Look, w: Int, h: Int): Layers =
+        Layers(w.coerceAtLeast(1), h.coerceAtLeast(1)).also { ThreadFace.draw(claude, codex, it) }
 }
 
 internal fun fill(color: Int, alpha: Float = 1f) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -449,5 +463,82 @@ private object DashFace {
             }
         }
         ink.drawText(sub, x0, y + 13 * u, text(4.6f * u, 0.55f))
+    }
+}
+
+/**
+ * The 4x1, and the foot of the card: both weekly limits as two threads twisted
+ * round each other from left to right, Claude's and Codex's. Each is bright
+ * for the share of its week that's left and faint where it's been used, so
+ * the two read against each other at a glance. No figures: the card has them.
+ * The crossings alternate over and under, like a real twist.
+ */
+private object ThreadFace {
+    /** A used stretch of thread: still there, only faint. */
+    private const val SPENT = 0.2f
+    /** Stale data keeps its shape but loses its color, as on the other faces. */
+    private const val STALE = 0.45f
+
+    fun draw(claude: Look, codex: Look, l: Layers) {
+        val w = l.w.toFloat()
+        val h = l.h.toFloat()
+        val acc = l.accCanvas
+        val pad = h * 0.16f
+        val sw = h * 0.06f
+        val x0 = pad + sw
+        val x1 = w - pad - sw
+        val cy = h / 2
+        // A low, long wave: the threads cross at a shallow angle (about 28°).
+        val amp = (h / 2 - pad - sw / 2) * 0.6f
+        if (x1 <= x0 || amp <= 0f) return
+        // A whole number of half twists, so both ends meet at a crossing.
+        val n = ((x1 - x0) / (amp * 6f)).roundToInt().coerceAtLeast(1)
+        val half = (x1 - x0) / n
+
+        fun y(sign: Float, x: Float) = cy + sign * amp * sin(Math.PI * (x - x0) / half).toFloat()
+        fun path(sign: Float, from: Float, to: Float) = Path().apply {
+            moveTo(from, y(sign, from))
+            var x = from
+            while (x < to) {
+                x = min(x + 1f, to)
+                lineTo(x, y(sign, x))
+            }
+        }
+        class Strand(val look: Look, sign: Float) {
+            val color = Render.accent(look.provider)
+            val alpha = if (look.stale) STALE else 1f
+            val paired = look.mode != Mode.UNPAIRED && look.mode != Mode.WAITING && look.week != null
+            val path = path(sign, x0, x1)
+            private val split = x0 + (if (paired) look.weekLeft / 100f else 0f) * (x1 - x0)
+            // Separate paths with butt ends, so bright meets faint square to the thread.
+            private val lit = if (split > x0) path(sign, x0, split) else null
+            private val spent = if (split < x1) path(sign, split, x1) else null
+
+            fun drawIn(left: Float, right: Float) {
+                acc.save()
+                acc.clipRect(left, 0f, right, h)
+                lit?.let { acc.drawPath(it, stroke(color, sw, alpha, round = false)) }
+                spent?.let { acc.drawPath(it, stroke(color, sw, alpha * SPENT, round = false)) }
+                acc.restore()
+            }
+        }
+        val a = Strand(claude, -1f)
+        val b = Strand(codex, 1f)
+        val moat = Paint(CLEAR).apply { strokeWidth = sw * 2.2f }
+
+        // One slice per crossing, cut where the threads are furthest apart. In
+        // each, the lower thread first, then a gap cleared around the upper one,
+        // then the upper one. The cuts are on whole pixels, so slices tile cleanly.
+        for (k in 0..n) {
+            val left = if (k == 0) 0f else (x0 + (k - 0.5f) * half).roundToInt().toFloat()
+            val right = if (k == n) w else (x0 + (k + 0.5f) * half).roundToInt().toFloat()
+            val (under, over) = if (k % 2 == 0) b to a else a to b
+            under.drawIn(left, right)
+            acc.save()
+            acc.clipRect(left, 0f, right, h)
+            acc.drawPath(over.path, moat)
+            acc.restore()
+            over.drawIn(left, right)
+        }
     }
 }

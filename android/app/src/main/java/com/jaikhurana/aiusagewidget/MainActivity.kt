@@ -214,7 +214,7 @@ private fun Footer(store: Store, fg: Color) {
 private val STATES = listOf("LIVE", "NORMAL", "LOW", "5H OUT", "7D OUT", "GO!", "STALE", "UNPAIRED")
 
 /**
- * The four widgets, drawn by the same code the home screen uses, showing your
+ * The five widgets, drawn by the same code the home screen uses, showing your
  * numbers or any state picked from the row above them. Tap one to place it.
  */
 @Composable
@@ -223,6 +223,11 @@ private fun Gallery(look: Look, fg: Color) {
     var state by remember { mutableStateOf(0) }
     val shown = if (state == 0) look else demoLooks(now)[state - 1].copy(provider = look.provider)
     val accent = Color(Render.accent(look))
+    // The threads draw both providers: the picked state for the one on the
+    // widgets, live numbers for the other.
+    val ctx = LocalContext.current
+    val otherProvider = if (look.provider == UsageProvider.CLAUDE) UsageProvider.CODEX else UsageProvider.CLAUDE
+    val other = remember(look) { Widgets.look(ctx, provider = otherProvider) }
 
     Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -258,6 +263,7 @@ private fun Gallery(look: Look, fg: Color) {
                     Tile("2×2 MATRIX", MatrixWidget::class.java, Style.MATRIX, shown, half, half, fg)
                 }
                 Tile("4×2 DASH", DashWidget::class.java, Style.DASH, shown, full, full * 0.48f, fg)
+                Tile("4×1 THREADS", ThreadWidget::class.java, Style.THREAD, shown, full, full * 0.22f, fg, other)
                 SmallTile(shown, fg)
             }
         }
@@ -272,10 +278,10 @@ private fun pin(ctx: android.content.Context, cls: Class<out UsageWidget>) {
 
 /** One widget with its name under it; tapping asks the launcher to place it. */
 @Composable
-private fun Tile(name: String, cls: Class<out UsageWidget>, style: Style, look: Look, width: Dp, height: Dp, fg: Color) {
+private fun Tile(name: String, cls: Class<out UsageWidget>, style: Style, look: Look, width: Dp, height: Dp, fg: Color, other: Look? = null) {
     val ctx = LocalContext.current
     Column(Modifier.size(width, height + 36.dp).clip(RoundedCornerShape(28.dp)).clickable { pin(ctx, cls) }) {
-        Preview(style, look, width, height)
+        Preview(style, look, width, height, other)
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Label(name, fg, 0.7f, Modifier.weight(1f), size = 11.sp)
             Label("+ ADD", fg, 0.45f, size = 11.sp)
@@ -315,10 +321,10 @@ fun demoLooks(now: Instant): List<Look> {
 
 /** A widget as the launcher would show it: system background, tinted ink, accent on top. */
 @Composable
-fun Preview(style: Style, look: Look, width: Dp, height: Dp) {
+fun Preview(style: Style, look: Look, width: Dp, height: Dp, other: Look? = null) {
     val ctx = LocalContext.current
     val px = with(LocalDensity.current) { width.roundToPx() to height.roundToPx() }
-    val layers = remember(style, look, px) { Render.draw(ctx, style, look, px.first, px.second) }
+    val layers = remember(style, look, other, px) { Render.draw(ctx, style, look, px.first, px.second, other) }
     val shape = if (style == Style.RING) CircleShape else RoundedCornerShape(20.dp)
     Box(
         Modifier
