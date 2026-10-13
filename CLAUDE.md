@@ -29,8 +29,9 @@ the Android, Wear OS and iOS clients. Closing a client must never stop the serve
 - `aiusagebar.desktop` — tray-only desktop autostart entry.
 - `scripts/setup-tunnel.sh` — independent Cloudflare tunnel/server services.
 - `android/`, `wearos/`, `ios/` — companion clients, with their own `CLAUDE.md`.
-  Any APK built for checking on a device is also served over the home network and
-  the tailnet (see `android/CLAUDE.md` → Build and install).
+  Any APK built for checking on a device gets a link: its GitHub release, or if
+  it isn't released, served over the home network and the tailnet (see
+  `android/CLAUDE.md` → Build and install).
   Pure widget rules remain in step across Android/Wear and `ios/Core/`.
 - `docs/screenshots/` — app-only screenshots; exclude deployment URLs/addresses.
 - `CLAUDE.local.md` — gitignored live deployment details; never publish them.

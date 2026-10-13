@@ -130,11 +130,13 @@ compileSdk 37). Several emulators and the watch are often on adb; always
 pass `-s`. `emulator-5554` is a phone running Nothing Launcher, good for
 checking the widgets.
 
-**Every APK Jai should check on the phone also gets served to Jai**, on the
-home network and the tailnet, per the "Local servers" rule in the global
-`~/.claude/CLAUDE.md`: put only the APK in a fresh directory, serve that
-directory (not port 8765), and give both clickable links after checking they
-answer. The addresses belong in `../CLAUDE.local.md`, never in this file.
+**Every APK Jai should check on the phone needs a link Jai can open.** If
+it's attached to a GitHub release, the release URL is enough; don't serve it
+too. Otherwise serve it on the home network and the tailnet, per the "Local
+servers" rule in the global `~/.claude/CLAUDE.md`: put only the APK in a
+fresh directory, serve that directory (not port 8765), and give both
+clickable links after checking they answer. The addresses belong in
+`../CLAUDE.local.md`, never in this file.
 
 Releases: bump `versionCode`/`versionName` in `app/build.gradle.kts`, build
 the release APK, and attach it as `AIusageWidget-<version>.apk` with
