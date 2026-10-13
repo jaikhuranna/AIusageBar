@@ -11,6 +11,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -61,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Duration
@@ -132,16 +136,9 @@ class CardActivity : ComponentActivity() {
         }
     }
 
+    // Not gated on busy: both providers are cached, so this is only a redraw.
     private fun selectProvider(provider: UsageProvider) {
-        if (busy) return
-        busy = true
-        lifecycleScope.launch {
-            try {
-                Sync.selectProvider(this@CardActivity, provider)
-            } finally {
-                busy = false
-            }
-        }
+        lifecycleScope.launch(Dispatchers.IO) { Sync.selectProvider(this@CardActivity, provider) }
     }
 
     private fun openApp() {
@@ -163,13 +160,6 @@ class CardActivity : ComponentActivity() {
 
 @Composable
 private fun CardScreen(from: Rect?, card: Float, backdrop: Float, busy: Boolean, onRefresh: () -> Unit, onSelectProvider: (UsageProvider) -> Unit, onOpenApp: () -> Unit, onDismiss: () -> Unit) {
-    val ctx = LocalContext.current
-    val changes by Store.changes.collectAsState()
-    // On the wall-clock minute, the same instant the widgets' countdown ticks.
-    val minute by produceState(0L) { while (true) { delay(60_000 - System.currentTimeMillis() % 60_000); value++ } }
-    val store = remember(changes, minute) { Store(ctx) }
-    val look = remember(changes, minute) { Widgets.look(ctx) }
-
     // Grow out of the widget that was tapped.
     var origin by remember { mutableStateOf(TransformOrigin.Center) }
 
@@ -205,103 +195,116 @@ private fun CardScreen(from: Rect?, card: Float, backdrop: Float, busy: Boolean,
                 .clip(RoundedCornerShape(32.dp))
                 .background(colorResource(R.color.widget_bg))
                 .clickable(remember { MutableInteractionSource() }, null) {} // taps on the card don't dismiss it
+                .verticalScroll(rememberScrollState())
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            Card(look, store, busy, onRefresh, onSelectProvider, onOpenApp)
+            Card(busy, onRefresh, onSelectProvider, onOpenApp)
         }
     }
 }
 
 @Composable
-private fun Card(look: Look, store: Store, busy: Boolean, onRefresh: () -> Unit, onSelectProvider: (UsageProvider) -> Unit, onOpenApp: () -> Unit) {
+private fun Card(busy: Boolean, onRefresh: () -> Unit, onSelectProvider: (UsageProvider) -> Unit, onOpenApp: () -> Unit) {
+    val ctx = LocalContext.current
     val fg = colorResource(R.color.widget_elements)
-    val headline = remember { FontFamily(Fonts.headline) }
+    val changes by Store.changes.collectAsState()
+    val store = remember(changes) { Store(ctx) }
 
-    // Header: whose numbers, and how old.
-    val snap = store.snapshot()
-    val age = snap?.cacheFetchedAt?.toEpochMilli() ?: look.fetchedAt
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        ProviderSelector(look, fg, enabled = !busy, onSelect = onSelectProvider)
-        Text(
-            when {
-                busy -> "REFRESHING…"
-                look.offline -> "OFFLINE · ${agoText(age, look.now).uppercase()}"
-                else -> "UPDATED ${agoText(age, look.now).uppercase()}"
-            },
-            fg.copy(alpha = 0.55f),
-            TextStyle(fontSize = 10.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.1.em, textAlign = TextAlign.End),
-            Modifier.weight(1f).padding(start = 12.dp),
-        )
-    }
-
-    // The ring and the one number that matters most right now.
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-        Preview(Style.RING, look, 104.dp, 104.dp)
-        val (big, caption, color) = hero(look)
-        Column {
-            Text(big, color, TextStyle(fontFamily = headline, fontSize = 60.sp, letterSpacing = (-0.03).em, lineHeight = 60.sp))
-            Label(caption, fg, 0.7f)
-        }
-    }
-
-    WindowRow(look.sessionLabel, look.session, look.sessionLength, look, fg, headline, timer = look.mode == Mode.SESSION_OUT)
-    WindowRow(look.weekLabel, look.week, look.weekLength, look, fg, headline, timer = false)
+    Providers(onSelectProvider)
 
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier
+                .heightIn(min = 48.dp)
                 .clip(RoundedCornerShape(50))
-                .background(Color(Render.accent(look)).copy(alpha = if (busy) 0.5f else 1f))
+                .background(Color(Render.accent(store.selected)).copy(alpha = if (busy) 0.5f else 1f))
                 .clickable(enabled = !busy, onClick = onRefresh)
-                .padding(horizontal = 22.dp, vertical = 12.dp),
+                .padding(horizontal = 22.dp, vertical = 14.dp),
+            contentAlignment = Alignment.Center,
         ) {
             Label(if (busy) "REFRESHING" else "REFRESH", Color.White, 1f)
         }
         Spacer(Modifier.weight(1f))
-        Box(Modifier.clip(RoundedCornerShape(50)).clickable(onClick = onOpenApp).padding(horizontal = 12.dp, vertical = 12.dp)) {
+        Box(Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(50)).clickable(onClick = onOpenApp).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
             Label("OPEN APP", fg, 0.7f)
         }
     }
-    if (snap != null && store.host != null) Label("FROM ${store.host!!.uppercase()}", fg, 0.35f, size = 10.sp)
+    store.host?.let { Label("FROM ${it.uppercase()}", fg, 0.35f, size = 10.sp) }
 }
 
-/** Switch every widget from the expanded card, without opening the setup app. */
+/**
+ * Claude and Codex together, each with its own age. Both are fetched on every
+ * refresh, so picking which one the widgets show is instant and never waits
+ * on the network. Shared by the card and the app.
+ */
 @Composable
-private fun ProviderSelector(look: Look, fg: Color, enabled: Boolean, onSelect: (UsageProvider) -> Unit) {
-    Row(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        UsageProvider.entries.forEach { provider ->
-            val selected = provider == look.provider
-            val accent = Color(Render.accent(look.copy(provider = provider)))
-            val shape = RoundedCornerShape(50)
-            Box(
-                Modifier
-                    .heightIn(min = 48.dp)
-                    .clip(shape)
-                    .background(if (selected) accent.copy(alpha = 0.15f) else Color.Transparent)
-                    .border(1.dp, if (selected) accent else fg.copy(alpha = 0.2f), shape)
-                    .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = {
-                        if (!selected) onSelect(provider)
-                    })
-                    .padding(horizontal = 10.dp, vertical = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Label(provider.title.uppercase(), if (selected) accent else fg, if (enabled) 1f else 0.5f, size = 11.sp)
+fun Providers(onSelect: (UsageProvider) -> Unit) {
+    val ctx = LocalContext.current
+    val changes by Store.changes.collectAsState()
+    // On the wall-clock minute, the same instant the widgets' countdown ticks.
+    val minute by produceState(0L) { while (true) { delay(60_000 - System.currentTimeMillis() % 60_000); value++ } }
+    val selected = remember(changes) { Store(ctx).selected }
+    val fg = colorResource(R.color.widget_elements)
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        UsageProvider.entries.forEachIndexed { i, provider ->
+            if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(fg.copy(alpha = 0.1f)))
+            val store = remember(changes, minute, provider) { Store(ctx, provider) }
+            val look = remember(changes, minute, provider) { Widgets.look(ctx, provider = provider) }
+            ProviderBlock(look, store, provider == selected, fg) { onSelect(provider) }
+        }
+    }
+}
+
+@Composable
+private fun ProviderBlock(look: Look, store: Store, selected: Boolean, fg: Color, onSelect: () -> Unit) {
+    val headline = remember { FontFamily(Fonts.headline) }
+    val accent = Color(Render.accent(look))
+    val age = store.snapshot()?.cacheFetchedAt?.toEpochMilli() ?: look.fetchedAt
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(8.dp).clip(RoundedCornerShape(50)).background(accent))
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Label(look.provider.title.uppercase(), fg, 0.9f, size = 13.sp)
+                Label(
+                    when {
+                        look.mode == Mode.UNPAIRED -> "NOT PAIRED"
+                        look.mode == Mode.WAITING -> "WAITING FOR THE DESKTOP"
+                        look.offline -> "OFFLINE · ${agoText(age, look.now).uppercase()}"
+                        else -> "UPDATED ${agoText(age, look.now).uppercase()}"
+                    },
+                    fg, 0.5f, size = 10.sp,
+                )
+            }
+            WidgetToggle(selected, accent, fg, onSelect)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Preview(Style.RING, look, 72.dp, 72.dp)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                WindowRow(look.sessionLabel, look.session, look.sessionLength, look, fg, headline, timer = look.mode == Mode.SESSION_OUT)
+                WindowRow(look.weekLabel, look.week, look.weekLength, look, fg, headline, timer = false)
             }
         }
     }
 }
 
-/** The big figure: whichever window is closest to biting, or the countdown. */
-private fun hero(look: Look): Triple<String, String, Color> = when (look.mode) {
-    Mode.UNPAIRED -> Triple("PAIR", "OPEN THE APP TO PAIR", Color(Render.GREY))
-    Mode.WAITING -> Triple("…", "WAITING FOR THE DESKTOP", Color(Render.GREY))
-    Mode.NORMAL ->
-        if (look.week == null || (look.session != null && look.sessionLeft <= look.weekLeft)) Triple("${look.sessionLeft}%", "OF THE ${look.sessionLabel} LIMIT LEFT", Color(Render.accent(look)))
-        else Triple("${look.weekLeft}%", "OF THE ${look.weekLabel} LIMIT LEFT", Color(Render.accent(look)))
-    Mode.SESSION_OUT -> Triple(look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT", "UNTIL THE ${look.sessionLabel} RESET", Color(Render.YELLOW))
-    Mode.WEEK_OUT -> Triple(look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT", "${look.weekLabel} LIMIT HIT", Color(Render.GREY))
-    Mode.GO -> Triple("GO!", "${look.provider.title.uppercase()}'S BACK", Color(Render.accent(look)))
+/** Which provider the home-screen widgets draw. Never disabled: switching is a redraw. */
+@Composable
+private fun WidgetToggle(selected: Boolean, accent: Color, fg: Color, onSelect: () -> Unit) {
+    val shape = RoundedCornerShape(50)
+    Box(
+        Modifier
+            .heightIn(min = 40.dp)
+            .clip(shape)
+            .background(if (selected) accent.copy(alpha = 0.15f) else Color.Transparent)
+            .border(1.dp, if (selected) accent else fg.copy(alpha = 0.2f), shape)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = { if (!selected) onSelect() })
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Label(if (selected) "ON WIDGETS" else "SHOW ON WIDGETS", if (selected) accent else fg, if (selected) 1f else 0.7f, size = 10.sp)
+    }
 }
 
 @Composable
@@ -324,7 +327,7 @@ private fun WindowRow(
             Text(
                 when { !paired -> "--"; out -> "OUT"; else -> "$remaining%" },
                 if (paired) color else fg,
-                TextStyle(fontFamily = headline, fontSize = 28.sp, lineHeight = 28.sp),
+                TextStyle(fontFamily = headline, fontSize = 24.sp, lineHeight = 24.sp),
                 Modifier.alignByBaseline(),
             )
         }
@@ -351,7 +354,7 @@ private fun WindowRow(
                 "Resets ${clockText(ctx, reset, look.now)}, in ${untilText(look.now, reset)}$p"
             }
         }
-        if (sub.isNotEmpty()) Text(sub, fg.copy(alpha = 0.6f), TextStyle(fontSize = 13.sp))
+        if (sub.isNotEmpty()) Text(sub, fg.copy(alpha = 0.6f), TextStyle(fontSize = 12.sp, lineHeight = 16.sp))
     }
 }
 
@@ -376,9 +379,9 @@ private fun DotBar(lit: Float, on: Color, fg: Color, tick: Float?) {
 }
 
 @Composable
-private fun Label(text: String, color: Color, alpha: Float, modifier: Modifier = Modifier, size: TextUnit = 12.sp) =
+internal fun Label(text: String, color: Color, alpha: Float, modifier: Modifier = Modifier, size: TextUnit = 12.sp) =
     Text(text, color.copy(alpha = alpha), TextStyle(fontSize = size, fontWeight = FontWeight.Medium, letterSpacing = 0.1.em), modifier)
 
 @Composable
-private fun Text(text: String, color: Color, style: TextStyle, modifier: Modifier = Modifier) =
+internal fun Text(text: String, color: Color, style: TextStyle, modifier: Modifier = Modifier) =
     androidx.compose.material3.Text(text, modifier, style = style.copy(color = color))

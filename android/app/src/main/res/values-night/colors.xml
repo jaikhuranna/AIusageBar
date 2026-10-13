@@ -2,4 +2,5 @@
 <resources>
     <color name="widget_bg">@android:color/system_neutral1_900</color>
     <color name="widget_elements">#FFFFFFFF</color>
+    <color name="app_bg">#FF000000</color>
 </resources>

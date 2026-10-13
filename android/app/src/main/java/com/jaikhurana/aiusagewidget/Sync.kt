@@ -9,6 +9,9 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -18,6 +21,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * The one fetcher. Everything else renders what this leaves in [Store].
+ * Each run asks for Claude and Codex in parallel and caches both.
  * Same cadence as AIusageWear (Plan.nextCheck), minus the alerts: the bridge's
  * events are the watch's job, and two devices buzzing for one crossing is noise.
  */
@@ -26,47 +30,50 @@ object Sync {
     private const val MANUAL_THROTTLE_MS = 60_000L
 
     /**
-     * Fetch, redraw every widget, and schedule the next check. Opening the app
-     * within a minute of a good fetch skips the network; [force] always fetches.
+     * Fetch every provider at once, redraw every widget, and schedule the next
+     * check. Opening the app within a minute of a good fetch skips the network;
+     * [force] always fetches.
      */
     suspend fun run(context: Context, manual: Boolean, force: Boolean = false) = mutex.withLock {
-        withContext(Dispatchers.IO) { runLocked(context.applicationContext, manual, force) }
-    }
-
-    suspend fun selectProvider(context: Context, provider: UsageProvider) = mutex.withLock {
+        val ctx = context.applicationContext
+        val main = Store(ctx)
+        val base = main.baseUrl
+        val token = main.token
+        if (base == null || token == null) {
+            Widgets.refreshAll(ctx)
+            return@withLock
+        }
+        val bases = listOfNotNull(base, main.lanUrl).distinct()
+        val now = System.currentTimeMillis()
+        // Each provider has its own cache, so the two requests never touch the same keys.
+        coroutineScope {
+            UsageProvider.entries.map { provider ->
+                async(Dispatchers.IO) {
+                    val store = Store(ctx, provider)
+                    val recent = store.lastError == null && now - store.fetchedAt < MANUAL_THROTTLE_MS
+                    if (force || !(manual && recent)) fetch(store, bases, token, now)
+                    store.snapshot()?.let { Plan.comeback(it, Instant.now()) }?.let { store.backAt = it.toEpochMilli() }
+                    // Redraw as soon as the provider on screen has its answer.
+                    if (provider == store.selected) Widgets.refreshAll(ctx)
+                }
+            }.awaitAll()
+        }
         withContext(Dispatchers.IO) {
-            val ctx = context.applicationContext
-            val store = Store(ctx)
-            if (store.provider != provider) {
-                Scheduler.cancel(ctx)
-                store.selectProvider(provider)
-                Widgets.refreshAll(ctx)
-                runLocked(ctx, manual = true, force = true)
+            val stores = UsageProvider.entries.map { Store(ctx, it) }
+            if (stores.any { it.lastError == Store.ERROR_UNPAIRED }) {
+                Scheduler.cancel(ctx) // polling can't fix a revoked token; the app asks to pair again
+            } else {
+                // Soonest of the two: the card shows both, so neither may go stale.
+                Scheduler.schedule(ctx, stores.minOf { Plan.nextCheck(it.snapshot(), Instant.now(), it.failures) })
             }
         }
     }
 
-    private fun runLocked(ctx: Context, manual: Boolean, force: Boolean) {
-        val store = Store(ctx)
-        val base = store.baseUrl
-        val token = store.token
-        if (base == null || token == null) {
-            Widgets.refreshAll(ctx)
-            return
-        }
-
-        val now = System.currentTimeMillis()
-        val recent = store.lastError == null && now - store.fetchedAt < MANUAL_THROTTLE_MS
-        if (force || !(manual && recent)) fetch(store, listOfNotNull(base, store.lanUrl).distinct(), token, now)
-
-        val snap = store.snapshot()
-        snap?.let { Plan.comeback(it, Instant.now()) }?.let { store.backAt = it.toEpochMilli() }
+    /** Both caches are kept warm, so switching is only a redraw. It never waits for a fetch. */
+    fun selectProvider(context: Context, provider: UsageProvider) {
+        val ctx = context.applicationContext
+        Store(ctx).selectProvider(provider)
         Widgets.refreshAll(ctx)
-        if (store.lastError == Store.ERROR_UNPAIRED) {
-            Scheduler.cancel(ctx) // polling can't fix a revoked token; the app asks to pair again
-        } else {
-            Scheduler.schedule(ctx, Plan.nextCheck(snap, Instant.now(), store.failures))
-        }
     }
 
     /** Tries the tunnel, then the LAN address; the first one that answers wins. */

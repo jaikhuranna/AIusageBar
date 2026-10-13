@@ -10,6 +10,8 @@
 <resources>
     <color name="widget_bg">@android:color/system_neutral1_50</color>
     <color name="widget_elements">#FF000000</color>
+    <!-- The app's page, behind the widget-colored cards. -->
+    <color name="app_bg">@android:color/system_neutral1_100</color>
 
     <!-- The orange, timer yellow and grey are fixed, so they live in Render.kt. -->
 </resources>

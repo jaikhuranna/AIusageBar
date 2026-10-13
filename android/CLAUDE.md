@@ -8,12 +8,13 @@ countdown when one runs out, and a "GO!" when it comes back. It's the phone
 sibling of the Wear OS app in `../wearos/`, and reads the same standalone Go server
 (`cmd/aiusage-server` at the repo root) the same way.
 
-The widget tap card's header selects Claude or Codex and updates every widget.
-The setup/gallery app shows the current provider but does not have a selector. Codex
-uses a green accent; Claude uses orange. `window_minutes` controls window
+The widget tap card and the app both show Claude and Codex together, each with
+its own age; a "Show on widgets" toggle on each picks the one the widgets draw.
+Codex uses a green accent; Claude uses orange. `window_minutes` controls window
 labels, pace and timer fractions. An unreported window stays unknown.
-Provider changes are serialized with fetches and clear quota/comeback caches,
-while keeping the pairing token.
+Every sync fetches both providers in parallel into separate caches
+(`Store(ctx, provider)`, keys suffixed `_claude` / `_codex`), so switching is
+only a redraw: never gate it on a refresh, and never clear a cache on switch.
 
 ## The four widgets
 
@@ -27,8 +28,10 @@ while keeping the pairing token.
 States, shared by all four (`Mode` in `Look.kt`, highest priority first):
 
 - **UNPAIRED / WAITING** — "PAIR" or "...".
-- **WEEK_OUT** — everything grey and struck through diagonally, counting down
-  to the weekly reset.
+- **WEEK_OUT** — everything grey, counting down to the weekly reset. The ring
+  is struck through like a no-entry sign; the matrix's diagonal passes behind
+  the countdown; the dash strikes only the spent bar. Never draw a strike over
+  text.
 - **SESSION_OUT** — the 5h ring/bar turns into yellow dots that drain as the
   reset nears, with an H:MM countdown.
 - **GO** — "GO!" for an hour after a comeback (`Store.backAt`), or until the
@@ -45,8 +48,9 @@ States, shared by all four (`Mode` in `Look.kt`, highest priority first):
     (wire format, cadence and comeback rules, time text). Keep them in step with the
     watch app when the bridge contract changes.
   - `Bridge.kt` — the watch's client minus `/events`.
-  - `Store.kt`, `Sync.kt` — one cache, one fetcher, WorkManager one-shot jobs
-    on `Plan.nextCheck`'s cadence.
+  - `Store.kt`, `Sync.kt` — one cache per provider, one fetcher that asks for
+    both at once, WorkManager one-shot jobs on the sooner of the two
+    providers' `Plan.nextCheck`.
   - `Look.kt` — the pure state: mode, stale, countdown, pace. Unit-tested.
     `../ios/Core/` ports this and the other pure files (Model, Plan, Format,
     DotFont), and `../ios/Shared/Faces.swift` ports `Render.kt`. A rule or face
@@ -58,15 +62,19 @@ States, shared by all four (`Mode` in `Look.kt`, highest priority first):
     (redraws each minute during a countdown, every 5 min otherwise, never
     waking the phone).
   - `CardActivity.kt` — what a widget tap opens once paired: a Nothing-style
-    card over the blurred home screen (both limits, resets, pace, the data's
-    age, Claude/Codex selector, Refresh, Open app). Opening it refreshes. Its own task, so dismissing
+    card over the blurred home screen (`Providers`: Claude and Codex, each with
+    both limits, resets, pace, the data's age and a "Show on widgets" toggle;
+    then Refresh and Open app). Opening it refreshes. Its own task, so dismissing
     it returns to the home screen. Unpaired, a tap opens the app instead.
     The tap is a broadcast to `CardReceiver`, which starts the card: a tap
     that launches an activity directly gets the launcher's widget-to-window
     morph, which drew a stretched box behind the card on Nothing Launcher.
   - `MainActivity.kt`, `Pairing.kt` — pairing (NSD + 6-digit code, like the
-    watch), status, and a gallery of every widget in every state. Tapping a
-    gallery entry pins that widget.
+    watch), the same `Providers` panel as the card, and a gallery: the four
+    widgets with live numbers, or any state picked from the chips above them.
+    Tapping one pins it. Unpair sits in the footer behind a confirmation. The
+    app uses the widget colours (`app_bg` page, `widget_bg` cards) and the
+    selected provider's accent, not Material You's dynamic colours.
 
 ## How the Nothing look works
 

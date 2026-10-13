@@ -34,7 +34,8 @@ class Layers(val w: Int, val h: Int) {
 enum class Style { RING, MATRIX, DASH }
 
 object Render {
-    fun accent(look: Look): Int = if (look.provider == UsageProvider.CODEX) 0xFF10A37F.toInt() else ORANGE
+    fun accent(look: Look): Int = accent(look.provider)
+    fun accent(provider: UsageProvider): Int = if (provider == UsageProvider.CODEX) 0xFF10A37F.toInt() else ORANGE
     const val ORANGE = 0xFFD97757.toInt()
     const val YELLOW = 0xFFFFC53D.toInt()
     const val GREY = 0xFF8C8C8C.toInt()
@@ -226,7 +227,7 @@ private object MatrixFace {
             put(label, 1, bottom, labelV)
             val x0 = 1 + DotFont.width(label) + 2
             val x1 = cols - 2
-            val lit = ((x1 - x0 + 1) * percent / 100f).roundToInt()
+            val lit = if (percent > 0) ceil((x1 - x0 + 1) * percent / 100f).toInt() else 0
             for (c in x0..x1) for (r in bottom + 2..bottom + 4) {
                 if (r in 0 until rows) grid[r][c] = if (c - x0 < lit) v else OFF
             }
@@ -238,7 +239,7 @@ private object MatrixFace {
             Mode.NORMAL -> {
                 put(look.sessionLabel, 1, top, INK)
                 putRight(shortCountdown(look.now, look.session?.resetsAt), cols - 2, top, INK)
-                big = (if (look.session == null) "--" else look.sessionLeft.toString()) to ORANGE
+                big = (if (look.session == null) "--" else "${look.sessionLeft}%") to ORANGE
                 bar(look.weekLabel, INK, look.weekLeft, ORANGE)
             }
             Mode.SESSION_OUT -> {
@@ -279,15 +280,15 @@ private object MatrixFace {
             }
         }
         if (slashed) {
-            // A diagonal of lit dots through the whole panel, with a dark moat
-            // cut through the type as well.
-            CLEAR.strokeWidth = pitch * 4.6f
-            l.accCanvas.drawLine(ox + pitch / 2, oy + pitch / 2, ox + (cols - 0.5f) * pitch, oy + (rows - 0.5f) * pitch, CLEAR)
+            // A diagonal of lit dots through the panel, with a dark moat. It
+            // passes behind the countdown, so the time to the reset stays readable.
+            val type = Array(rows) { r -> BooleanArray(cols) { c -> grid[r][c] == BLANK } }
             for (c in 0 until cols) {
                 val y = c * (rows - 1f) / (cols - 1)
                 for (r in 0 until rows) {
+                    if (type[r][c]) continue
                     val d = kotlin.math.abs(r - y)
-                    if (d <= 0.75f) grid[r][c] = INK else if (d <= 2.3f) grid[r][c] = BLANK
+                    if (d <= 0.75f) grid[r][c] = GREY else if (d <= 2.3f) grid[r][c] = BLANK
                 }
             }
         }
@@ -343,8 +344,8 @@ private object DashFace {
             Mode.UNPAIRED -> Triple("PAIR", "TAP TO SET UP", Color.WHITE)
             Mode.WAITING -> Triple("...", "FETCHING", Color.WHITE)
             Mode.NORMAL ->
-                if (look.week == null || (look.session != null && look.sessionLeft <= look.weekLeft)) Triple("${look.sessionLeft}", "% ${look.sessionLabel} LEFT", Render.accent(look))
-                else Triple("${look.weekLeft}", "% ${look.weekLabel} LEFT", Render.accent(look))
+                if (look.week == null || (look.session != null && look.sessionLeft <= look.weekLeft)) Triple("${look.sessionLeft}%", "${look.sessionLabel} LEFT", Render.accent(look))
+                else Triple("${look.weekLeft}%", "${look.weekLabel} LEFT", Render.accent(look))
             Mode.SESSION_OUT -> Triple(look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT", "UNTIL THE ${look.sessionLabel} RESET", Render.YELLOW)
             Mode.WEEK_OUT -> Triple(look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT", "${look.weekLabel} LIMIT HIT", Render.GREY)
             Mode.GO -> Triple("GO!", "${look.provider.title.uppercase()}'S BACK", Render.accent(look))
@@ -367,14 +368,6 @@ private object DashFace {
         val x1 = l.w - pad
         row(ctx, look, l, look.sessionLabel, look.session, look.sessionLength, 30 * u, x0, x1, u, ::text)
         row(ctx, look, l, look.weekLabel, look.week, look.weekLength, 70 * u, x0, x1, u, ::text)
-
-        if (look.mode == Mode.WEEK_OUT) {
-            val (ax, ay, bx, by) = listOf(l.w * 0.04f, l.h * 0.08f, l.w * 0.96f, l.h * 0.92f)
-            CLEAR.strokeWidth = 5.5f * u
-            ink.drawLine(ax, ay, bx, by, CLEAR)
-            acc.drawLine(ax, ay, bx, by, CLEAR)
-            acc.drawLine(ax, ay, bx, by, stroke(Render.GREY, 1.8f * u))
-        }
     }
 
     private fun row(
@@ -417,13 +410,16 @@ private object DashFace {
             !paired -> Triple(0, fill(Render.accent(look)), ink(0.12f))
             timerRow -> Triple(ceil(n * look.sessionTimerFraction()).toInt(), fill(Render.YELLOW), fill(Render.YELLOW, 0.22f))
             look.mode == Mode.WEEK_OUT -> Triple(0, fill(Render.GREY), fill(Render.GREY, 0.45f))
-            else -> Triple((n * remaining / 100f).roundToInt(), fill(Render.accent(look)), ink(0.13f))
+            // Any headroom at all lights a dot; an empty bar means OUT.
+            else -> Triple(if (remaining > 0) ceil(n * remaining / 100f).toInt() else 0, fill(Render.accent(look)), ink(0.13f))
         }
         for (i in 0 until n) {
             val cx = bx0 + (i + 0.5f) * spacing
             if (i < lit) acc.drawCircle(cx, y, r, on)
             else (if (off.color == Color.WHITE) ink else acc).drawCircle(cx, y, r, off)
         }
+        // The spent window is struck through, leaving its labels readable.
+        if (out && look.mode == Mode.WEEK_OUT) acc.drawLine(bx0, y, bx0 + n * spacing, y, stroke(Render.GREY, 1.2f * u))
 
         // The "time left" tick: headroom reaching past it means you'll last.
         val reset = e?.resetsAt

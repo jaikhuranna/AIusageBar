@@ -45,8 +45,8 @@ object Widgets {
     /** A bitmap layer's budget; RemoteViews refuse very large parcels. */
     private const val MAX_LAYER_BYTES = 3_000_000f
 
-    fun look(ctx: Context, now: Instant = Instant.now()): Look {
-        val s = Store(ctx)
+    fun look(ctx: Context, now: Instant = Instant.now(), provider: UsageProvider? = null): Look {
+        val s = Store(ctx, provider)
         return Look.of(s.paired, s.snapshot(), s.fetchedAt, s.lastError, s.backAt, now).copy(provider = s.provider)
     }
 
