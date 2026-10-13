@@ -65,8 +65,11 @@ object Bridge {
 
     private fun open(url: String, token: String?): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
-                        connectTimeout = 15_000
-            readTimeout = 15_000
+            connectTimeout = 15_000
+            // Longer than the bridge's 30s Claude refresh, which runs before it
+            // answers. Giving up sooner falls through to the LAN address, which
+            // then gets the old numbers because the bridge refreshes once a minute.
+            readTimeout = 45_000
             token?.let { setRequestProperty("Authorization", "Bearer $it") }
         }
 }

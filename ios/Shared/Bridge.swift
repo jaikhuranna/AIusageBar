@@ -26,7 +26,7 @@ enum Bridge {
         let c = URLSessionConfiguration.ephemeral
         c.urlCache = nil
         c.requestCachePolicy = .reloadIgnoringLocalCacheData
-        c.timeoutIntervalForRequest = 15
+        c.timeoutIntervalForRequest = 45 // past the bridge's 30s Claude refresh, which runs before it answers
         return URLSession(configuration: c)
     }()
 

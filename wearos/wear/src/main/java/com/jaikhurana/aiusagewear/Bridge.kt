@@ -79,7 +79,7 @@ object Bridge {
         (URL(url).openConnection() as HttpURLConnection).apply {
             // Generous: a Bluetooth proxy through the phone can take a while.
             connectTimeout = 20_000
-            readTimeout = 20_000
+            readTimeout = 45_000 // past the bridge's 30s Claude refresh, which runs before it answers
             token?.let { setRequestProperty("Authorization", "Bearer $it") }
         }
 }

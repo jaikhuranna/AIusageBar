@@ -77,6 +77,13 @@ func (r *refresher) ensureFresh() bool {
 		log.Printf("refresh: claude /usage failed after %s: %v: %.200s", time.Since(start).Round(time.Millisecond), err, out)
 		return false
 	}
+	// Both are otherwise silent, and both leave a client showing old numbers.
+	if took := time.Since(start); took > 10*time.Second {
+		log.Printf("refresh: claude /usage took %s", took.Round(time.Millisecond))
+	}
+	if r.cacheAge() >= r.minAge {
+		log.Printf("refresh: claude /usage exited cleanly but left the cache %s old", r.cacheAge().Round(time.Second))
+	}
 	return true
 }
 
