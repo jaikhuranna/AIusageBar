@@ -47,7 +47,16 @@ object Sync {
         val now = System.currentTimeMillis()
         // Each provider has its own cache, so the two requests never touch the same keys.
         coroutineScope {
-            UsageProvider.entries.map { provider ->
+            // Each family's pool beside the snapshots: the 1x1 and the threads draw from it.
+            val pools = PoolFamily.entries.map { family ->
+                async(Dispatchers.IO) {
+                    val pool = PoolStore(ctx, family)
+                    val recent = !pool.offline && now - pool.fetchedAt < MANUAL_THROTTLE_MS
+                    if (force || !(manual && recent)) fetchPool(pool, bases, token, now)
+                    Widgets.refreshAll(ctx, Widgets.ALL.filter { it.style == Style.POOL || it.style == Style.THREAD })
+                }
+            }
+            pools + UsageProvider.entries.map { provider ->
                 async(Dispatchers.IO) {
                     val store = Store(ctx, provider)
                     val recent = store.lastError == null && now - store.fetchedAt < MANUAL_THROTTLE_MS
@@ -56,7 +65,7 @@ object Sync {
                     // Redraw as soon as the provider on screen has its answer. The
                     // threads show both, so they redraw on either.
                     if (provider == store.selected) Widgets.refreshAll(ctx)
-                    else Widgets.refreshAll(ctx, Widgets.ALL.filter { it.style == Style.THREAD })
+                    else Widgets.refreshAll(ctx, Widgets.ALL.filter { it.style == Style.THREAD || it.style == Style.POOL })
                 }
             }.awaitAll()
         }
@@ -96,7 +105,41 @@ object Sync {
             }
             Bridge.Usage.NotModified -> ok(store, now)
             Bridge.Usage.Unauthorized -> store.lastError = Store.ERROR_UNPAIRED
-            is Bridge.Usage.Failed -> failed(store)
+            is Bridge.Usage.Failed, Bridge.Usage.NotFound -> failed(store)
+        }
+    }
+
+    /**
+     * Same addresses as [fetch]. A 404 is an older bridge without `/pool`: the
+     * cache is dropped so everything falls back to the per-provider look.
+     */
+    private fun fetchPool(pool: PoolStore, bases: List<String>, token: String, now: Long) {
+        val etag = pool.etag.takeIf { pool.json != null }
+        var r: Bridge.Usage = Bridge.Usage.Failed("no address")
+        for (b in bases) {
+            r = Bridge.pool(b, token, etag, pool.family)
+            if (r !is Bridge.Usage.Failed) break
+        }
+        when (r) {
+            is Bridge.Usage.Fresh -> if (runCatching { parsePool(r.body).family == pool.family }.getOrDefault(false)) {
+                pool.json = r.body
+                pool.etag = r.etag
+                pool.fetchedAt = now
+                pool.offline = false
+            } else {
+                pool.offline = true
+            }
+            Bridge.Usage.NotModified -> {
+                pool.fetchedAt = now
+                pool.offline = false
+            }
+            Bridge.Usage.NotFound -> {
+                pool.json = null
+                pool.etag = null
+                pool.offline = false
+            }
+            // A revoked token shows on the snapshots, which ask to pair again.
+            Bridge.Usage.Unauthorized, is Bridge.Usage.Failed -> pool.offline = true
         }
     }
 

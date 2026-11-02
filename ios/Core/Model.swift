@@ -1,8 +1,14 @@
 import Foundation
 
 enum UsageProvider: String, CaseIterable {
-    case claude, codex
-    var title: String { self == .codex ? "Codex" : "Claude" }
+    case claude, claude2, codex
+    var title: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .claude2: return "Claude 2"
+        }
+    }
 }
 
 /// One plan-limit window as the bridge reports it.
@@ -26,6 +32,8 @@ struct Snapshot: Equatable {
     var provider: UsageProvider = .claude
     var costAvailable: Bool = true
     var sourceError: String? = nil
+    /// Email of the subscription behind these limits, when the bridge knows it (hub mode).
+    var account: String? = nil
 }
 
 private struct Wire: Decodable {
@@ -46,6 +54,7 @@ private struct Wire: Decodable {
     let provider: String?
     let cost_available: Bool?
     let source_error: String?
+    let account: String?
 }
 
 func parseSnapshot(_ json: String) throws -> Snapshot {
@@ -59,8 +68,9 @@ func parseSnapshot(_ json: String) throws -> Snapshot {
         host: o.host ?? "",
         cacheFetchedAt: parseInstant(o.cache_fetched_at),
         provider: UsageProvider(rawValue: o.provider ?? "claude") ?? .claude,
-        costAvailable: o.cost_available ?? (o.provider != "codex"),
-        sourceError: o.source_error
+        costAvailable: o.cost_available ?? ((o.provider ?? "claude") == "claude"),
+        sourceError: o.source_error,
+        account: o.account.flatMap { $0.isEmpty ? nil : $0 }
     )
 }
 

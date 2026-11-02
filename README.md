@@ -20,14 +20,16 @@ flowchart LR
 | :---: | :---: |
 | <img src="docs/screenshots/watch-session.png" width="260" alt="Watch: 55% left this session, resets in 4h 14m"> | <img src="docs/screenshots/watch-weekly.png" width="260" alt="Watch: 15% left this week, resets in 1d 8h"> |
 
-| Android widget | Out of session: countdown to the reset | Widget picker in the app |
+| Android widget | Out of session: countdown to the reset | Tap card: both families, 5h graph, weekly threads |
 | :---: | :---: | :---: |
-| <img src="docs/screenshots/widget-session.png" width="260" alt="Widget: 10% of the session left, 38% of the week, with pace estimates"> | <img src="docs/screenshots/widget-out.png" width="260" alt="Widget: session out, 2:51 until the 5h reset"> | <img src="docs/screenshots/widget-app.png" width="260" alt="Android app listing the ring and card widgets"> |
+| <img src="docs/screenshots/widget-session.png" width="260" alt="Widget: 10% of the session left, 38% of the week, with pace estimates"> | <img src="docs/screenshots/widget-out.png" width="260" alt="Widget: session out, 2:51 until the 5h reset"> | <img src="docs/screenshots/widget-card.png" width="260" alt="Tap card: Claude across two accounts at 50% of the session and 57% of the week, Codex at 89% and 51%, a 12-hour graph of the pooled session with reset steps, and every account's week as twisted threads"> |
 
-- Tray icon = colored dot (green/orange/red) by how close you are to your
-  worst plan limit. Tray text = `Claude 5h NN% · 7d NN%` or the selected Codex windows.
+- Tray icon = two small meters (green/orange/red, grey when stale) for the
+  label's two numbers. Tray text = one provider's windows (`C1 5h 42% · 7d 61%`)
+  or, with two Claude accounts, each account's tighter limit (`Claude 42 · 17%`).
 - Click menu shows:
-  - **Session (5h)** and **Week (7d)** limit utilization and when each resets
+  - **Session (5h)** and **Week (7d)** limit utilization and when each resets,
+    for every provider the server serves (Claude, Claude 2, Codex)
     - read straight from Anthropic's own cached usage data in `~/.claude.json`
       (the same numbers Claude Code itself shows you), so the percentages and
       reset times are exact, not estimated.
@@ -77,9 +79,16 @@ cd android && ./gradlew :app:assembleRelease    # app/build/outputs/apk/release/
 ```
 
 The phone app has five widgets (a 1x1 and a 2x2 ring, a 2x2 dot matrix, a
-4x2 dashboard, and a 4x1 of Claude's and Codex's weekly limits as two twisted
-threads) in Nothing OS's style; tapping one opens a card with both
-limits and a refresh.
+4x2 dashboard, and a 4x1 of weekly limits as one twisted thread per account)
+in Nothing OS's style. The 1x1 pools every account of the selected family
+(see **Pooled limits**); the app itself shows each family's session and weekly
+limits with a row per account. Tapping one opens a compact card with both families'
+limits, a five-hour history graph with a remembered Claude/Codex toggle,
+weekly threads and a refresh. The graph uses a coloured line and gradient
+fill for recorded history, a NOW marker and dashed steps at upcoming resets.
+Those future steps assume no more spending; account-coloured markers show
+reset times and gains where space allows. The graph and threads have no
+animation or glow.
 
 Or skip the build: the phone app's APK is attached to each `widget-v*` release
 on the [Releases](https://github.com/jaikhuranna/AIusageBar/releases) page.
@@ -97,7 +106,7 @@ the dash. Tapping one opens the app's card and refreshes. The app cards and
 gallery use Liquid Glass on iOS 26+, with material backgrounds on iOS 17–18.
 Choose the Home Screen's **Clear** appearance for WidgetKit's Liquid Glass
 widget background; tinted and Lock Screen appearances are also supported.
-Select Claude or Codex in the app; all its widgets follow that selection.
+Select Claude, Claude 2 or Codex in the app; all its widgets follow that selection.
 
 ## Run the server and tray
 
@@ -125,8 +134,19 @@ The tray stores its own device token and chosen provider in
 `$XDG_CONFIG_HOME/aiusagebar/client.json` (default `~/.config/aiusagebar/client.json`,
 mode 0600). It never reads provider credentials, transcripts, or server state.
 Changing `-server` clears the old token; pair with the new server before using it.
-`-provider claude|codex` sets the initial provider; the tray menu also switches it.
-`-check` fetches one JSON snapshot without opening the tray, useful for diagnostics.
+The menu lists every provider the server serves: Claude (or Claude 1 and
+Claude 2, each with its account email, when the server runs a CLIProxyAPI hub
+with two subscriptions) and Codex, each with its 5h and weekly meters, reset
+times and any source error. Claude 2 only appears once the server has delivered
+limits for it.
+`-provider pool|claude|claude2|codex` chooses what the top-bar label shows, and
+the menu's "Top bar shows" (or a click on a section heading) changes it. `pool`,
+the default for new configs, shows both Claude accounts as `Claude 42 · 17%`:
+each number is that account's tighter limit (the higher of its 5h and weekly
+use), and the icon's two bars match the two numbers. A single provider shows
+`C1 5h 42% · 7d 61%`. Saved configs naming `claude` or `codex` keep working.
+`-check` fetches one JSON snapshot without opening the tray (an array of both
+Claude accounts for `pool`), useful for diagnostics.
 `-config /path/to/client.json` selects a different client configuration.
 
 ## Serve usage over the LAN
@@ -181,11 +201,12 @@ false`); the numeric cost fields are compatibility placeholders.
 
 | Endpoint | What it does |
 | --- | --- |
-| `GET /usage` | current snapshot for `?provider=claude` (default) or `?provider=codex`, refreshed first if it's stale (see **Freshness**). Sends an `ETag`; send it back as `If-None-Match` to get `304` when nothing has changed |
-| `GET /events?since=<id>` | alert events for the selected `provider` (default `claude`; append `&provider=codex` for Codex), including threshold crossings and window resets newer than `<id>`, plus the new `high_water` mark |
+| `GET /usage` | current snapshot for `?provider=claude` (default), `claude2` (second hub account, see **Several Claude accounts**) or `codex`, refreshed first if it's stale (see **Freshness**). Sends an `ETag`; send it back as `If-None-Match` to get `304` when nothing has changed |
+| `GET /events?since=<id>` | alert events for the selected `provider` (default `claude`; append `&provider=claude2` or `&provider=codex`), including threshold crossings and window resets newer than `<id>`, plus the new `high_water` mark |
+| `GET /pool?family=claude\|codex` | the **pooled** limit across a family's accounts, with recorded history and a projection (see **Pooled limits**). Same auth as `/usage`; `ETag`/`If-None-Match` work too |
 | `POST /pair` `{"code":"123456"}` | redeems a pairing code for a per-device token (plus `public_url`, if set) |
 | `GET /healthz` | liveness, no auth, no usage data. Says whether a token is needed |
-| `GET /share` | off unless `-share` is set. The selected provider's limits only (`?provider=codex` for Codex), no token, readable from web pages (see **Show it on a website**) |
+| `GET /share` | off unless `-share` is set. The selected provider's limits only (`?provider=codex`, `claude2`), never the account email, no token, readable from web pages (see **Show it on a website**) |
 
 ```json
 {
@@ -212,6 +233,8 @@ fractions. Neither window has a fixed duration; an hourly primary and daily
 secondary are also supported. Reset times always come from `resets_at`. Optional `source_error`
 means the upstream source is unavailable; any attached limits are stale.
 Older bridges that omit `provider` and `cost_available` are treated as Claude.
+An optional `account` (the subscription's email) is sent in hub mode; clients
+that don't know it ignore it.
 
 ### Freshness
 
@@ -233,6 +256,88 @@ of the numbers. The bridge never talks to Anthropic itself.
 ./aiusage-server -serve :8765 -refresh-min-age 0      # never; serve the cache as Claude Code leaves it
 ./aiusage-server -serve :8765 -claude /opt/bin/claude # if claude isn't on PATH or in ~/.local/bin
 ```
+
+### Pooled limits (`/pool`)
+
+`GET /pool?family=claude|codex` (default `claude`; anything else is `400`;
+optional `days=1..14` sets how much history to return, default 7) answers "how
+much can I still use across all my accounts?". Claude's family is every hub
+account, Codex's is a pool of one. Numbers are in *account-percent*: one account
+is 100, so two accounts have `capacity_pct` 200. The wire types are in
+`internal/protocol/pool.go`.
+
+```json
+{
+  "family": "claude", "accounts": 2, "capacity_pct": 200,
+  "remaining_pct": 131.0, "five_hour_remaining_pct": 103.0, "effective_remaining_pct": 103.0,
+  "burn_pct_per_hour": 1.63,
+  "next_reset": {"at": "2026-11-01T02:48:00Z", "gain_pct": 65.4},
+  "first_empty_at": "2026-11-06T05:29:57Z", "pool_empty_at": null,
+  "members": [{"provider": "claude", "account": "a@x.com", "five_hour": {"...": "as /usage"}, "seven_day": {"...": "as /usage"}, "source_error": ""}],
+  "history": [{"t": 1793393280, "remaining_pct": 131.0, "five_hour_remaining_pct": 103.0, "effective_remaining_pct": 103.0}],
+  "projection": [{"t": 1793393280, "remaining_pct": 131.0, "reset": false}],
+  "generated_at": "2026-10-31T02:48:00Z", "source_error": ""
+}
+```
+
+- `remaining_pct` is the weekly pool (Σ `100 - seven_day.utilization`);
+  `five_hour_remaining_pct` the same over the five-hour windows;
+  `effective_remaining_pct` sums, per account, the smaller of the two, which is
+  what is usable right now. A window an account doesn't report stands in for the
+  other one.
+- `burn_pct_per_hour` is how fast `remaining_pct` dropped over the last 3 hours
+  of history (resets inside the window don't offset it); `null` until there's a
+  minute of history.
+- `projection` plays the pool forward 7 days: one point per hour plus, at each
+  weekly reset, two points with the same `t` (value just before, then the value
+  after with `reset: true`). It drains at the burn rate split evenly across the
+  accounts that still have weekly capacity, never below 0, and an account
+  jumps back to 100 at its `seven_day.resets_at` (and every window length after:
+  7 days, or Codex's `window_minutes`). With no burn it is flat apart from the
+  step-ups.
+- `first_empty_at` / `pool_empty_at` come from that projection (`null` if not
+  within 7 days; `pool_empty_at` is "now" if every account is already at 0).
+  `next_reset` is the soonest reset and what it adds back.
+- No account with data (Claude without a signed-in hub account, say) gives
+  `accounts: 0`, empty arrays and a `source_error`; it is not an HTTP error.
+
+History is sampled by the poll loop and on each `/pool` request whenever the
+pool's numbers change (at least 5 minutes apart, plus an hourly sample even if
+nothing changed), kept for 14 days and stored as JSON lines in
+`$XDG_STATE_HOME/aiusagebar/pool-history-<family>.jsonl` (mode 0600), so it
+survives restarts. The `ETag` covers the underlying snapshots and a 15-minute
+time bucket, because the projection is anchored at "now".
+New history samples also include `five_hour_remaining` (remaining percent,
+0–100) and `five_hour_resets_at` (Unix seconds), maps keyed by provider such
+as `claude`, `claude2` or `codex`. Only accounts reporting a five-hour window
+are included, and idle windows may have no reset. Older samples omit these
+maps; clients can fall back to the pooled five-hour sum.
+
+### Several Claude accounts (CLIProxyAPI hub)
+
+With more than one Claude subscription pooled behind a local
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) hub, Claude Code no
+longer refreshes `~/.claude.json` for any one of them. Point the server at the
+hub and it reads each account's limits from there instead:
+
+```sh
+./aiusage-server -serve :8765 -cliproxy-url http://127.0.0.1:8317 -cliproxy-key-file ~/.cli-proxy-api/keys.env
+```
+
+The key file is env-style and must hold a `CPA_MGMT_KEY=...` line (the hub's
+management key; it is re-read on every poll and never logged). In this mode:
+
+- The hub's enabled Claude accounts, sorted by email, become providers `claude`
+  (first) and `claude2` (second). A missing account is a `source_error`.
+- The hub is asked at most every 5 minutes (15s timeout): its management
+  `auth-files` route lists accounts, and its `api-call` route fetches
+  Anthropic's usage for each one on the account's own token. The **hub** calls
+  Anthropic; the server only talks to the hub. The `claude -p /usage`
+  refresher is not used. If the hub fails, the last limits are kept and
+  `source_error` says so.
+- Transcripts are pooled across accounts, so the cost estimate stays on
+  `claude` (windowed by that account's resets); `claude2` has
+  `cost_available: false`. Alerts are armed separately for each provider.
 
 Claude's `resets_at` is rounded to the minute: Anthropic's value wobbles by a second
 between fetches, which would otherwise look like the window rolling over. Codex reset times

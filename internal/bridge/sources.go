@@ -248,7 +248,7 @@ func applyLine(line string, starts []time.Time, totals []float64, seen map[strin
 // ---------- collected snapshot ----------
 
 type snapshot struct {
-	provider, sourceError            string
+	provider, sourceError, account   string
 	fiveHour, sevenDay               *limitWindow
 	cacheFetchedAt                   time.Time
 	costToday, costSession, costWeek float64
@@ -256,6 +256,14 @@ type snapshot struct {
 
 func gather() snapshot {
 	fiveHour, sevenDay, fetchedAt := loadLimits()
+	return withCost(snapshot{fiveHour: fiveHour, sevenDay: sevenDay, cacheFetchedAt: fetchedAt})
+}
+
+// withCost fills in the transcript cost estimate around s's limit windows. The
+// transcripts are pooled across accounts, so the figure is the same whichever
+// account supplied the limits.
+func withCost(s snapshot) snapshot {
+	fiveHour, sevenDay := s.fiveHour, s.sevenDay
 
 	now := time.Now()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -269,12 +277,6 @@ func gather() snapshot {
 	}
 
 	totals := costSince([]time.Time{todayStart, sessionStart, weekStart})
-	return snapshot{
-		fiveHour:       fiveHour,
-		sevenDay:       sevenDay,
-		cacheFetchedAt: fetchedAt,
-		costToday:      totals[0],
-		costSession:    totals[1],
-		costWeek:       totals[2],
-	}
+	s.costToday, s.costSession, s.costWeek = totals[0], totals[1], totals[2]
+	return s
 }

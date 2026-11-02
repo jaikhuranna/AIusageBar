@@ -29,7 +29,7 @@ func ConfigPath() (string, error) {
 }
 
 func Load(path string) (Config, error) {
-	c := Config{Server: DefaultServer, Provider: "claude"}
+	c := Config{Server: DefaultServer, Provider: Pool}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return c, nil
@@ -44,8 +44,8 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return c, err
 	}
-	if !ValidProvider(c.Provider) {
-		return c, errors.New("provider must be claude or codex")
+	if !ValidChoice(c.Provider) {
+		return c, errChoice
 	}
 	return c, nil
 }
@@ -54,8 +54,8 @@ func Save(path string, c Config) error {
 	if _, err := NormalizeURL(c.Server); err != nil {
 		return err
 	}
-	if !ValidProvider(c.Provider) {
-		return errors.New("provider must be claude or codex")
+	if !ValidChoice(c.Provider) {
+		return errChoice
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
@@ -79,7 +79,18 @@ func Save(path string, c Config) error {
 	return os.Rename(f.Name(), path)
 }
 
-func ValidProvider(p string) bool { return p == "claude" || p == "codex" }
+// Pool is a saved tray choice, not a wire provider: both Claude accounts at
+// once. Saved configs from before it existed name a single provider.
+const Pool = "pool"
+
+var errChoice = errors.New("provider must be pool, claude, claude2 or codex")
+
+// ValidProvider is a provider the server's API serves. "claude2" is the hub's
+// second Claude subscription.
+func ValidProvider(p string) bool { return p == "claude" || p == "claude2" || p == "codex" }
+
+// ValidChoice is what a tray config may save as its provider.
+func ValidChoice(p string) bool { return p == Pool || ValidProvider(p) }
 
 // Changing server must never send the old server's token to the new address.
 func (c *Config) SetServer(raw string) error {

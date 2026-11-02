@@ -4,7 +4,7 @@ import org.json.JSONObject
 import java.time.Instant
 
 enum class UsageProvider(val wire: String, val title: String) {
-    CLAUDE("claude", "Claude"), CODEX("codex", "Codex");
+    CLAUDE("claude", "Claude"), CLAUDE2("claude2", "Claude 2"), CODEX("codex", "Codex");
     companion object {
         fun fromWire(value: String) = entries.firstOrNull { it.wire == value } ?: CLAUDE
     }
@@ -26,6 +26,8 @@ data class Snapshot(
     val provider: UsageProvider = UsageProvider.CLAUDE,
     val costAvailable: Boolean = true,
     val sourceError: String? = null,
+    /** Email of the subscription behind these limits, when the bridge knows it (hub mode). */
+    val account: String? = null,
 )
 
 /** One entry from GET /events. The bridge decides alerts; we only render them. */
@@ -47,8 +49,9 @@ fun parseSnapshot(json: String): Snapshot {
         costWeek = o.optDouble("cost_week", 0.0),
         host = o.optString("host"),
         provider = UsageProvider.fromWire(o.optString("provider")),
-        costAvailable = o.optBoolean("cost_available", o.optString("provider") != "codex"),
+        costAvailable = o.optBoolean("cost_available", UsageProvider.fromWire(o.optString("provider")) == UsageProvider.CLAUDE),
         sourceError = o.optString("source_error").takeIf { it.isNotBlank() },
+        account = o.optString("account").takeIf { it.isNotBlank() },
         cacheFetchedAt = runCatching { Instant.parse(o.optString("cache_fetched_at")) }.getOrNull(),
     )
 }

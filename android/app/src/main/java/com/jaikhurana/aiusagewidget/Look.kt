@@ -32,6 +32,8 @@ data class Look(
     val provider: UsageProvider = UsageProvider.CLAUDE,
     val sessionLength: Duration = SESSION,
     val weekLength: Duration = WEEK,
+    /** The subscription's email, when the bridge reports it. */
+    val account: String? = null,
 ) {
     /**
      * Old enough that the numbers shouldn't be trusted at full brightness. An
@@ -109,7 +111,8 @@ data class Look(
             return Look(mode, now, session, week, snap?.cacheFetchedAt?.toEpochMilli() ?: fetchedAt,
                 lastError == Store.ERROR_OFFLINE || snap?.sourceError != null, snap?.provider ?: UsageProvider.CLAUDE,
                 snap?.fiveHour?.windowMinutes?.let { Duration.ofMinutes(it.toLong()) } ?: SESSION,
-                snap?.sevenDay?.windowMinutes?.let { Duration.ofMinutes(it.toLong()) } ?: WEEK)
+                snap?.sevenDay?.windowMinutes?.let { Duration.ofMinutes(it.toLong()) } ?: WEEK,
+                snap?.account)
         }
     }
 }

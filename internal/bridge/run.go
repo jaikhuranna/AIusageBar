@@ -25,6 +25,8 @@ func Run(ctx context.Context, args []string) error {
 	share := f.String("share", "", "origins allowed to read public limits, comma separated, or *")
 	codexBin := f.String("codex", "", "path to the official Codex CLI")
 	claudeBin := f.String("claude", "", "path to the official Claude CLI")
+	hubURL := f.String("cliproxy-url", "", "CLIProxyAPI hub URL; Claude limits come from its accounts (claude, claude2) instead of ~/.claude.json")
+	hubKeyFile := f.String("cliproxy-key-file", "", "env-style file holding the hub's CPA_MGMT_KEY line; required with -cliproxy-url")
 	if err := f.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -41,6 +43,7 @@ func Run(ctx context.Context, args []string) error {
 			return errors.New("-public-url must be an HTTPS URL without credentials, query, or fragment")
 		}
 	}
+	var err error
 	if *pair {
 		return requestPairCode(*addr)
 	}
@@ -51,7 +54,14 @@ func Run(ctx context.Context, args []string) error {
 	m.codex = newCodexSource(*codexBin)
 	m.publicURL = *publicURL
 	m.shareOrigins = parseOrigins(*share)
-	m.refresh = newRefresher(*claudeBin, *refreshAge)
+	if *hubURL != "" {
+		// The hub supplies the limits, so the CLI refresher has nothing to do.
+		if m.hub, err = newHubSource(*hubURL, *hubKeyFile); err != nil {
+			return err
+		}
+	} else {
+		m.refresh = newRefresher(*claudeBin, *refreshAge)
+	}
 	stopControl, err := serveControl(m)
 	if err != nil {
 		return fmt.Errorf("pairing control socket: %w", err)

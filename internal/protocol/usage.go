@@ -34,8 +34,11 @@ type Window struct {
 }
 
 type Snapshot struct {
-	Provider      string  `json:"provider"`
-	SourceError   string  `json:"source_error,omitempty"`
+	Provider    string `json:"provider"`
+	SourceError string `json:"source_error,omitempty"`
+	// Account is the email of the subscription behind these limits, when the
+	// server knows it (hub mode). Additive: older clients ignore it.
+	Account       string  `json:"account,omitempty"`
 	CostAvailable bool    `json:"cost_available"`
 	Schema        int     `json:"schema"`
 	FiveHour      *Window `json:"five_hour"`

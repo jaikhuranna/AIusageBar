@@ -16,6 +16,16 @@ import java.time.Instant
 import kotlin.math.min
 import kotlin.math.sqrt
 
+/**
+ * Every account's week as a thread, family by family. A family with no
+ * accounts still has one faint thread, so the twist keeps its shape.
+ */
+fun strandsOf(views: List<FamilyView>, now: Instant): List<ThreadStrand> = views.flatMap { v ->
+    val stale = v.offline || now.toEpochMilli() - v.fetchedAt > Look.STALE.toMillis()
+    if (v.known.isEmpty()) listOf(ThreadStrand(Render.memberColor(v.family, 0), null, false))
+    else v.known.mapIndexed { i, m -> ThreadStrand(Render.memberColor(v.family, i), (m.week ?: m.session)?.remaining?.div(100f), stale) }
+}
+
 /** The five widgets. Each is only a style and a layout; the drawing is shared. */
 abstract class UsageWidget(val style: Style, val layout: Int) : AppWidgetProvider() {
     override fun onUpdate(ctx: Context, mgr: AppWidgetManager, ids: IntArray) {
@@ -34,11 +44,12 @@ abstract class UsageWidget(val style: Style, val layout: Int) : AppWidgetProvide
     }
 }
 
-class RingWidget : UsageWidget(Style.RING, R.layout.widget_glyph)
+/** The 1x1: the original ring, for every account of the selected provider's family pooled. */
+class RingWidget : UsageWidget(Style.POOL, R.layout.widget_glyph)
 class RingLargeWidget : UsageWidget(Style.RING, R.layout.widget_glyph)
 class MatrixWidget : UsageWidget(Style.MATRIX, R.layout.widget_card)
 class DashWidget : UsageWidget(Style.DASH, R.layout.widget_card)
-/** Both providers at once, whichever the others show. */
+/** Every account at once, whichever the others show. */
 class ThreadWidget : UsageWidget(Style.THREAD, R.layout.widget_card)
 
 object Widgets {
@@ -50,6 +61,28 @@ object Widgets {
     fun look(ctx: Context, now: Instant = Instant.now(), provider: UsageProvider? = null): Look {
         val s = Store(ctx, provider)
         return Look.of(s.paired, s.snapshot(), s.fetchedAt, s.lastError, s.backAt, now).copy(provider = s.provider)
+    }
+
+    /**
+     * The pooled ring of the family the widgets show (picking Claude 2 still
+     * pools every Claude account); null without a pool from this bridge.
+     */
+    fun pooledRing(ctx: Context, now: Instant = Instant.now()): Look? {
+        val family = PoolFamily.of(Store(ctx).selected)
+        val pool = PoolStore(ctx, family)
+        val stores = family.providers.map { Store(ctx, it) }
+        val fetched = stores.mapNotNull { it.snapshot()?.cacheFetchedAt?.toEpochMilli() }.minOrNull() ?: pool.fetchedAt
+        return poolRing(pool.pool(), fetched, pool.offline, stores.map { it.backAt }, now)
+    }
+
+    /**
+     * Every account's week as a thread, Claude's then Codex's. A family with no
+     * accounts (or none paired yet) still has one faint thread, so the twist
+     * keeps its shape.
+     */
+    fun strands(ctx: Context, now: Instant = Instant.now()): List<ThreadStrand> {
+        val paired = Store(ctx).paired
+        return strandsOf(PoolFamily.entries.map { f -> familyView(ctx, f, now).let { if (paired) it else it.copy(members = emptyList()) } }, now)
     }
 
     fun refreshAll(ctx: Context, only: List<UsageWidget> = ALL) {
@@ -66,11 +99,20 @@ object Widgets {
 
     fun render(ctx: Context, mgr: AppWidgetManager, id: Int, w: UsageWidget, look: Look) {
         val (wPx, hPx) = sizePx(ctx, mgr.getAppWidgetOptions(id), w.style)
-        val layers = if (w.style == Style.THREAD) threads(ctx, wPx, hPx) else Render.draw(ctx, w.style, look, wPx, hPx)
+        val ring = if (w.style == Style.POOL && look.mode != Mode.UNPAIRED) pooledRing(ctx, look.now) else null
+        val layers = when (w.style) {
+            Style.THREAD -> Render.threads(strands(ctx, look.now), wPx, hPx)
+            Style.POOL -> Render.pool(ctx, ring, look, wPx, hPx)
+            else -> Render.draw(ctx, w.style, look, wPx, hPx)
+        }
         val rv = RemoteViews(ctx.packageName, w.layout).apply {
             setImageViewBitmap(R.id.ink, layers.ink)
             setImageViewBitmap(R.id.accent, layers.accent)
-            setContentDescription(R.id.accent, if (w.style == Style.THREAD) describeWeeks(ctx) else describe(look))
+            setContentDescription(R.id.accent, when {
+                w.style == Style.THREAD -> describeWeeks(ctx)
+                ring != null -> describePool(ctx, ring)
+                else -> describe(look)
+            })
             // Paired, a tap opens the card (and refreshes); unpaired, it opens pairing.
             val tap = if (look.mode == Mode.UNPAIRED) openApp(ctx) else openCard(ctx)
             setOnClickPendingIntent(if (w.layout == R.layout.widget_glyph) R.id.root else android.R.id.background, tap)
@@ -92,12 +134,25 @@ object Widgets {
         return (wDp * scale).toInt() to (hDp * scale).toInt()
     }
 
-    private fun threads(ctx: Context, w: Int, h: Int) =
-        Render.threads(look(ctx, provider = UsageProvider.CLAUDE), look(ctx, provider = UsageProvider.CODEX), w, h)
+    private fun describeWeeks(ctx: Context): String {
+        val now = Instant.now()
+        return PoolFamily.entries.flatMap { f ->
+            val view = familyView(ctx, f, now)
+            if (view.known.isEmpty()) listOf("${f.title} unknown")
+            else view.known.map { m -> "${if (view.known.size > 1) "${f.title} ${m.number}" else f.title} ${(m.week ?: m.session)?.remaining}%" }
+        }.joinToString(", ", "Weekly allowance left: ", ". Tap for details.")
+    }
 
-    private fun describeWeeks(ctx: Context): String = UsageProvider.entries.joinToString(", ", "Weekly allowance left: ", ". Tap for details.") { p ->
-        val l = look(ctx, provider = p)
-        "${p.title} " + if (l.week == null || l.mode == Mode.UNPAIRED || l.mode == Mode.WAITING) "unknown" else "${l.weekLeft}%"
+    private fun describePool(ctx: Context, ring: Look): String {
+        val family = PoolFamily.of(Store(ctx).selected)
+        val n = familyView(ctx, family, ring.now).known.size
+        val who = if (n > 1) "${family.title}, $n accounts pooled" else family.title
+        return when (ring.mode) {
+            Mode.WAITING -> "${family.title}: no usage data yet. Tap for details."
+            Mode.WEEK_OUT, Mode.SESSION_OUT -> "$who: every limit reached" + (ring.countdownTo?.let { ", back in ${untilText(ring.now, it)}" } ?: "") + "."
+            Mode.GO -> "$who is back."
+            else -> "$who: ${ring.sessionLeft}% usable now, ${ring.weekLeft}% of the week left. Tap for details."
+        }
     }
 
     private fun describe(l: Look): String = when (l.mode) {
@@ -150,7 +205,7 @@ object Ticker {
             return
         }
         val now = System.currentTimeMillis()
-        if (look.ticking) {
+        if (look.ticking || Widgets.pooledRing(ctx)?.ticking == true) {
             val nextMinute = (now / 60_000L + 1) * 60_000L
             if (am.canScheduleExactAlarms()) am.setExact(AlarmManager.RTC, nextMinute, pi)
             else am.setWindow(AlarmManager.RTC, nextMinute, 30_000L, pi)

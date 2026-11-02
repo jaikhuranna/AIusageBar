@@ -2,38 +2,94 @@
 
 ## Goal
 
-Show Claude and Codex subscription usage on an Android home screen, in Nothing OS's
+Show Claude (one or more accounts, pooled) and Codex subscription usage on an Android home screen, in Nothing OS's
 widget style: how much of the 5h session and the weekly limit is left, a
 countdown when one runs out, and a "GO!" when it comes back. It's the phone
 sibling of the Wear OS app in `../wearos/`, and reads the same standalone Go server
 (`cmd/aiusage-server` at the repo root) the same way.
 
-The widget tap card and the app both show Claude and Codex together, each with
-its own age; a "Show on widgets" toggle on each picks the one the widgets draw.
-Codex uses a green accent; Claude uses orange. `window_minutes` controls window
+The app (MainActivity) is the detail behind the widgets, after T3 Code's mobile
+Usage sheet but in this app's language (dark cards, tracked caps, NType
+numerals, dot-matrix accents). Per family (Claude, then Codex): a Session card
+and a Weekly card, each with the share of the whole family left ("64% left"),
+what the next reset brings back ("↻ +28% in 3h 30m"), a pace mark, a bar cut
+into one segment per account, and a row per account (number, email, % left,
+reset countdown). No widget faces in the app. Pairing, "Widgets show"
+(which provider the widgets draw) and adding widgets sit in a bottom sheet
+behind the header's "•••" button. The widget tap card is the short version
+(below). Codex uses a green accent; Claude
+uses orange; Claude 2 (the second hub account, `UsageProvider.CLAUDE2`) a tan
+sibling of the orange (`Render.CLAUDE2`, `#BF8B5A`), so both read as Claude.
+When the bridge reports the account email (`account`), the app shows it under
+the provider name, elided in the middle when long. `window_minutes` controls window
 labels, pace and timer fractions. An unreported window stays unknown.
-Every sync fetches both providers in parallel into separate caches
-(`Store(ctx, provider)`, keys suffixed `_claude` / `_codex`), so switching is
+Every sync fetches every provider in parallel into separate caches
+(`Store(ctx, provider)`, keys suffixed `_claude` / `_claude2` / `_codex`), so switching is
 only a redraw: never gate it on a refresh, and never clear a cache on switch.
+
+## Pools (`GET /pool?family=claude|codex`)
+
+A family is every account whose limits pool together (`PoolFamily`): Claude is
+the hub's 1..N accounts, Codex a pool of one. Each sync fetches both families
+beside `/usage` into `PoolStore` (keys `pool_claude` / `pool_codex`). The wire
+contract is in the root README, "Pooled limits (`/pool`)". The members and
+sums drive the limit cards. Recorded five-hour history drives the tap card's
+session graph; weekly projection and burn figures are not drawn.
+
+- **`FamilyView`** (`Family.kt`, built by `familyView` in `Store.kt`) is what
+  the app and card draw: the family's accounts as `Member`s, numbered from 1.
+  From `/pool` when the bridge has it, else from the family's `/usage`
+  snapshots. Its age is the oldest snapshot's `cache_fetched_at`.
+- **`Meter.of(members, limit, now)`** is one limit across a family, pure and
+  tested (`FamilyTest`): `left` is Σ remaining ÷ accounts (45% and 82% → 64%);
+  `comeback` is the soonest reset that gives anything back, summing accounts
+  resetting within a minute of it, as a share of the family (at least 1%);
+  `pace` compares each running window's left with its time left (more than 5
+  points behind is "Ahead of pace", more than 5 ahead "Under pace"; none in a
+  window's first 10 min or when the family is out). `segmentSpans` lays out
+  the equal segments.
+- **The 1x1** (`Style.POOL`) is the original ring face (`RingFace`), drawn from
+  a pooled `Look` (`poolRing` in `Pool.kt`): the ring is what every account
+  together can spend now (Σ each account's tighter window ÷ capacity), the pie
+  the pooled week. Every week out → WEEK_OUT; nothing spendable → SESSION_OUT
+  counting to the first comeback; a family account's `backAt` within the hour
+  with the pool half full → GO. No accounts or no data → "…". A sliver never
+  rounds to an empty ring, nor almost-full to a closed one.
+- **The tap card** (`CardActivity`) never scrolls: per family two columns
+  (5h and 7d: big %, a slim per-account bar, the comeback line), then a compact
+  five-hour history graph with a remembered Claude | Codex toggle, then every
+  account's week as threads ("7D · ALL"), then Refresh / Open app. The graph
+  uses a coloured pooled line (0–100%, matching the headline), gradient fill,
+  a NOW dot and dashed future reset steps. Each recorded or upcoming reset
+  has an account-coloured notch and time, plus its "+N%" gain where space
+  permits. Future steps assume no additional spending. Long recording gaps
+  stay blank, and the line is cropped to the last 12 hours.
+- **Older bridges answer 404**: `PoolStore` is cleared, the 1x1 draws the
+  selected provider's own ring, and the app and card build each family from
+  its providers' snapshots instead.
 
 ## The five widgets
 
 | Widget | Size | Look |
 | --- | --- | --- |
-| Claude ring | 1x1 | Round face. Weekly left is the pie in the middle, the 5h session is the ring around it. All Claude orange. |
-| Claude ring, large | 2x2 | The same face, bigger. |
+| Pool | 1x1 | The original ring, for every account of the selected family pooled: spendable now as the ring, the pooled week as the pie. Without `/pool`, the selected provider's own ring. |
+| Claude ring, large | 2x2 | Round face. Weekly left is the pie in the middle, the 5h session is the ring around it. All Claude orange. |
 | Claude matrix | 2x2 | An LED dot panel: the session's % left set in type in a window cut out of the dots, small dot labels (5h reset in the corner), the week as a dot bar. |
 | Claude dash | 4x2 | The most urgent number on the left; both windows on the right as dot bars with a "time left" tick, reset times, and a pace estimate ("LASTS" / "EMPTY IN ~1H"). |
-| AI threads | 4x1 (resizes to 5x1) | Both providers' weekly limits as two threads twisted round each other, left to right: Claude orange, Codex green. Each is bright for the share of its week left and faint (not gone) where it's been used. No figures: a low, long wave, so the crossings are few and shallow (about 28°). The card ends with the same threads. |
+| AI threads | 4x1 (resizes to 5x1) | Every account's weekly limit as threads twisted round each other, left to right, in `Render.memberColor` order: Claude's accounts orange, tan, then further shades; Codex green (two strands are opposite; three are a third of a turn apart). A family with no accounts keeps one faint thread. Each is bright for the share of its week left and faint (not gone) where it's been used. No figures: a low, long wave, so the crossings are few and shallow (about 28°). The card ends with the same threads. |
 
-The threads ignore the "Show on widgets" pick and the session states: they
-only draw each provider's week (unknown or out is all faint), dimmed when
-that provider is stale. Crossings alternate over and under: each slice of
+The threads ignore the "Widgets show" pick and the session states: they
+only draw each account's week (unknown or out is all faint), dimmed when
+that family is stale. The card draws them `fancy`: a deeper twist, a fine ghost
+for the used stretch (with a gap cut only as wide as itself), a bead where
+bright meets faint, and strokes about 25% thinner than the earlier card.
+The weekly threads and session graph are static, with no glow or reveal.
+Crossings alternate over and under: each slice of
 `ThreadFace` draws the lower thread, clears a gap around the upper one, then
 draws the upper one, clipped on whole pixels so slices tile without seams.
 Bright and faint are separate butt-ended paths, so they meet square to the thread.
 
-States, shared by the other four (`Mode` in `Look.kt`, highest priority first):
+States, shared by the ring, matrix and dash (`Mode` in `Look.kt`, highest priority first; the pooled 1x1 has its own `PoolState`):
 
 - **UNPAIRED / WAITING** — "PAIR" or "...".
 - **WEEK_OUT** — everything grey, counting down to the weekly reset. The ring
@@ -54,10 +110,21 @@ States, shared by the other four (`Mode` in `Look.kt`, highest priority first):
 - `app/` — the only module. Package `com.jaikhurana.aiusagewidget`, minSdk 31.
   - `Model.kt`, `Plan.kt`, `Format.kt` — **copied from the watch app** in `../wearos/`
     (wire format, cadence and comeback rules, time text). Keep them in step with the
-    watch app when the bridge contract changes.
-  - `Bridge.kt` — the watch's client minus `/events`.
-  - `Store.kt`, `Sync.kt` — one cache per provider, one fetcher that asks for
-    both at once, WorkManager one-shot jobs on the sooner of the two
+    watch app when the bridge contract changes (the `account` field and the
+    `CLAUDE2` enum entry are copied to the watch and `../ios/Core/Model.swift`;
+    the watch's own UI stays Claude/Codex).
+  - `Bridge.kt` — the watch's client minus `/events`, plus `/pool` (404 → `NotFound`).
+  - `Pool.kt` — `/pool` parsing and `poolRing` (the pooled 1x1's `Look`).
+    Unit-tested in `PoolTest`. Android only so far; the watch and `../ios/`
+    don't read `/pool` yet.
+  - `SessionChart.kt` — pure five-hour chart logic: pooled history, recorded
+    reset markers, future reset steps and label placement. Tested in
+    `SessionChartTest`; older bridges fall back to pooled history and
+    inferred reset jumps.
+  - `Family.kt` — `Member`, `FamilyView`, `Meter` (left, comeback, pace,
+    segments) and `segmentSpans`. Pure; unit-tested in `FamilyTest`.
+  - `Store.kt`, `Sync.kt` — one cache per provider and one per family
+    (`PoolStore`), one fetcher that asks for all of them at once, WorkManager one-shot jobs on the soonest of the
     providers' `Plan.nextCheck`.
   - `Look.kt` — the pure state: mode, stale, countdown, pace. Unit-tested.
     `../ios/Core/` ports this and the other pure files (Model, Plan, Format,
@@ -65,26 +132,32 @@ States, shared by the other four (`Mode` in `Look.kt`, highest priority first):
     change here should land there too.
   - `DotFont.kt` — a hand-made 5×7 dot-matrix face (Ndot-like, no font
     file). Small accents only; see Typography.
-  - `Render.kt` — the four faces (`RingFace`, `MatrixFace`, `DashFace`,
-    `ThreadFace`). `ThreadFace` takes both providers' looks, so `Sync`
-    redraws the threads when either provider answers.
+  - `Render.kt` — the faces (`RingFace`, `MatrixFace`, `DashFace`,
+    `ThreadFace`) and `memberColor`. `ThreadFace` takes a `ThreadStrand` per
+    account (`strandsOf` in `Widgets.kt`), so `Sync` redraws the threads when
+    any provider answers.
   - `Widgets.kt` — the five `AppWidgetProvider`s, sizing, and `Ticker`
     (redraws each minute during a countdown, every 5 min otherwise, never
     waking the phone).
   - `CardActivity.kt` — what a widget tap opens once paired: a Nothing-style
-    card over the blurred home screen (`Providers`: Claude and Codex, each with
-    both limits, resets, pace, the data's age and a "Show on widgets" toggle;
-    then Refresh and Open app). Opening it refreshes. Its own task, so dismissing
+    card over the blurred home screen, short enough never to scroll: each
+    family's `FamilySummary`, the threads, Refresh and Open app. Opening it
+    refreshes. Its own task, so dismissing
     it returns to the home screen. Unpaired, a tap opens the app instead.
     The tap is a broadcast to `CardReceiver`, which starts the card: a tap
     that launches an activity directly gets the launcher's widget-to-window
     morph, which drew a stretched box behind the card on Nothing Launcher.
+  - `Usage.kt` — the Compose pieces the app and the card share: `FamilyHeader`,
+    `MeterCard` (the app's Session/Weekly card), `SegmentBar` (lit in each
+    account's colour for what's left, a dot-grid ghost where it's spent, a tick
+    at the share of the window still to run, the account's number in
+    `DotFont` dots), `ResetArrow`/`ResetLine`, `Threads`, `Label`, `Text`.
   - `MainActivity.kt`, `Pairing.kt` — pairing (NSD + 6-digit code, like the
-    watch), the same `Providers` panel as the card, and a gallery: the five
-    widgets with live numbers, or any state picked from the chips above them.
-    Tapping one pins it. Unpair sits in the footer behind a confirmation. The
-    app uses the widget colours (`app_bg` page, `widget_bg` cards) and the
-    selected provider's accent, not Material You's dynamic colours.
+    watch), the family cards, and the settings sheet: "Widgets show", "Add to
+    home screen" (by name; no faces in the app), Unpair behind a confirmation.
+    The app uses the widget colours (`app_bg` page, `widget_bg` cards) and the
+    selected provider's accent, not Material You's dynamic colours. A family
+    with no accounts shows the bridge's `source_error` in its own card.
 
 ## How the Nothing look works
 
@@ -118,6 +191,26 @@ became an accent:
 
 The emulator has no NType 82, so screenshots there show the fallback.
 
+## Checking the design
+
+A **debug** build can draw made-up pools (`src/debug/.../Fixtures.kt`: three
+Claude accounts, one out for the session, and Codex out for the week; release
+has a stub that returns null), and its manifest overlay exports the card so
+`am start` can open it:
+
+```sh
+adb -s <device> shell am start -n com.jaikhurana.aiusagewidget/.CardActivity --ez fixture true
+adb -s <device> shell am start -n com.jaikhurana.aiusagewidget/.MainActivity --ez fixture true
+```
+
+For live numbers, pair an emulator with the real server (`10.0.2.2:8765` is
+the host, or the mDNS entry): `aiusage-server -pair` mints the code. Don't
+force-stop the app before a home-screen screenshot: the Pixel launcher then
+draws its "app paused" placeholder over the widgets.
+
+The release build keeps the card unexported and ships no fixtures. Screenshots
+need an unlocked screen; the phone usually isn't, so use an emulator.
+
 ## Build and install
 
 ```sh
@@ -145,8 +238,8 @@ are shared with the tray and the watch). The APK is signed with the local debug
 key, so an update installs over the old one only from this machine's builds.
 
 Widget-picker previews for the matrix, dash and threads
-(`res/drawable-nodpi/preview_*.png`) are crops of the app's own gallery
-screenshots. Re-take them if those faces change.
+(`res/drawable-nodpi/preview_*.png`) are crops of home-screen screenshots
+(the app no longer has a gallery). Re-take them if those faces change.
 
 ## Conventions and gotchas
 

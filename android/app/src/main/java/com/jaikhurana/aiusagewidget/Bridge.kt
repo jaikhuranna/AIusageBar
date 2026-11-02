@@ -11,19 +11,29 @@ object Bridge {
         data class Fresh(val body: String, val etag: String?) : Usage
         data object NotModified : Usage
         data object Unauthorized : Usage
+        /** The bridge doesn't have this endpoint: an older server, for `/pool`. */
+        data object NotFound : Usage
         data class Failed(val reason: String) : Usage
     }
 
     data class Paired(val token: String, val publicUrl: String?, val host: String)
 
-    fun usage(base: String, token: String, etag: String?, provider: UsageProvider = UsageProvider.CLAUDE): Usage = try {
-        val c = open("$base/usage?provider=${provider.wire}", token)
+    fun usage(base: String, token: String, etag: String?, provider: UsageProvider = UsageProvider.CLAUDE): Usage =
+        get("$base/usage?provider=${provider.wire}", token, etag)
+
+    /** `GET /pool`: one family's pooled limits, history and projection. Older bridges answer 404. */
+    fun pool(base: String, token: String, etag: String?, family: PoolFamily): Usage =
+        get("$base/pool?family=${family.wire}", token, etag)
+
+    private fun get(url: String, token: String, etag: String?): Usage = try {
+        val c = open(url, token)
         etag?.let { c.setRequestProperty("If-None-Match", it) }
         try {
             when (c.responseCode) {
                 200 -> Usage.Fresh(c.inputStream.bufferedReader().use { it.readText() }, c.getHeaderField("ETag"))
                 304 -> Usage.NotModified
                 401 -> Usage.Unauthorized
+                404 -> Usage.NotFound
                 else -> Usage.Failed("HTTP ${c.responseCode}")
             }
         } finally {

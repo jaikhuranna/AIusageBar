@@ -13,6 +13,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import androidx.core.graphics.createBitmap
 import java.time.Duration
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.max
@@ -33,29 +34,50 @@ class Layers(val w: Int, val h: Int) {
     val accCanvas = Canvas(accent)
 }
 
-enum class Style { RING, MATRIX, DASH, THREAD }
+/** [POOL] is the 1x1: the ring, drawn for a whole family of accounts. */
+enum class Style { RING, MATRIX, DASH, THREAD, POOL }
+
+/** One thread of [Style.THREAD]: an account's week, bright for [left] (0..1, null unknown). */
+data class ThreadStrand(val color: Int, val left: Float?, val stale: Boolean)
 
 object Render {
     fun accent(look: Look): Int = accent(look.provider)
-    fun accent(provider: UsageProvider): Int = if (provider == UsageProvider.CODEX) 0xFF10A37F.toInt() else ORANGE
+    fun accent(provider: UsageProvider): Int = when (provider) {
+        UsageProvider.CLAUDE -> ORANGE
+        UsageProvider.CODEX -> GREEN
+        UsageProvider.CLAUDE2 -> CLAUDE2
+    }
     const val ORANGE = 0xFFD97757.toInt()
+    /**
+     * Claude 2: a tan sibling of Claude's orange, so both read as Claude. Less
+     * red than the orange, well short of the timer yellow, and as legible on the
+     * light card as the orange and green are (about 2.6:1).
+     */
+    const val CLAUDE2 = 0xFFBF8B5A.toInt()
+    /**
+     * Account [index] of a family: the first in the family's own colour, the
+     * second in its sibling (Claude 2's tan), and more in further shades, so
+     * every thread and segment of a family reads as that family.
+     */
+    fun memberColor(family: PoolFamily, index: Int): Int {
+        val shades = when (family) {
+            PoolFamily.CLAUDE -> intArrayOf(ORANGE, CLAUDE2, 0xFFE9A07E.toInt(), 0xFF9E5A3C.toInt())
+            PoolFamily.CODEX -> intArrayOf(GREEN, 0xFF6CC9A9.toInt(), 0xFF0B7559.toInt())
+        }
+        return shades[index.coerceAtLeast(0) % shades.size]
+    }
+    const val GREEN = 0xFF10A37F.toInt()
     const val YELLOW = 0xFFFFC53D.toInt()
     const val GREY = 0xFF8C8C8C.toInt()
     /** Stale data keeps its shape but loses its color. */
     private const val STALE_ALPHA = 115
 
-    /** [other] is the second provider's look, which only [Style.THREAD] draws. */
-    fun draw(ctx: Context, style: Style, look: Look, w: Int, h: Int, other: Look? = null): Layers {
-        if (style == Style.THREAD) {
-            val both = listOfNotNull(look, other)
-            val claude = both.firstOrNull { it.provider == UsageProvider.CLAUDE } ?: look
-            val codex = both.firstOrNull { it.provider == UsageProvider.CODEX } ?: look
-            return threads(claude, codex, w, h)
-        }
+    /** Every face but the threads, which draw many accounts at once ([threads]). */
+    fun draw(ctx: Context, style: Style, look: Look, w: Int, h: Int): Layers {
         val l = Layers(w.coerceAtLeast(1), h.coerceAtLeast(1))
         if (look.stale) l.accCanvas.saveLayerAlpha(null, STALE_ALPHA)
         when (style) {
-            Style.RING -> RingFace.draw(look, l)
+            Style.RING, Style.POOL -> RingFace.draw(look, l)
             Style.MATRIX -> MatrixFace.draw(look, l)
             Style.DASH -> DashFace.draw(ctx, look, l)
             Style.THREAD -> {}
@@ -64,9 +86,21 @@ object Render {
         return l
     }
 
-    /** Both weekly limits as two twisted threads. */
-    fun threads(claude: Look, codex: Look, w: Int, h: Int): Layers =
-        Layers(w.coerceAtLeast(1), h.coerceAtLeast(1)).also { ThreadFace.draw(claude, codex, it) }
+    /**
+     * The pooled 1x1: the original ring, drawn from [ring] ([poolRing]).
+     * Unpaired, or with no pool from this bridge (an older one), it is the
+     * selected provider's own ring.
+     */
+    fun pool(ctx: Context, ring: Look?, look: Look, w: Int, h: Int): Layers =
+        draw(ctx, Style.RING, if (look.mode == Mode.UNPAIRED || ring == null) look else ring, w, h)
+
+    /**
+     * Every account's week as twisted threads. [fancy] is the card's: a deeper
+     * twist, a fine ghost where the week's been used, and a bead where one
+     * meets the other.
+     */
+    fun threads(strands: List<ThreadStrand>, w: Int, h: Int, fancy: Boolean = false): Layers =
+        Layers(w.coerceAtLeast(1), h.coerceAtLeast(1)).also { ThreadFace.draw(strands, it, fancy) }
 }
 
 internal fun fill(color: Int, alpha: Float = 1f) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -467,11 +501,13 @@ private object DashFace {
 }
 
 /**
- * The 4x1, and the foot of the card: both weekly limits as two threads twisted
- * round each other from left to right, Claude's and Codex's. Each is bright
- * for the share of its week that's left and faint where it's been used, so
- * the two read against each other at a glance. No figures: the card has them.
- * The crossings alternate over and under, like a real twist.
+ * The 4x1, and the foot of the card: every account's weekly limit as threads
+ * twisted round each other from left to right (Claude's accounts in orange and
+ * tan, Codex's in green). Each is bright for the share of its week that's left
+ * and faint where it's been used, so they read against each other at a
+ * glance. No figures. The crossings alternate over and under, like a real
+ * twist. Two strands are exact opposites; three are a third of a turn apart,
+ * and the same slicing draws any number.
  */
 private object ThreadFace {
     /** A used stretch of thread: still there, only faint. */
@@ -479,66 +515,96 @@ private object ThreadFace {
     /** Stale data keeps its shape but loses its color, as on the other faces. */
     private const val STALE = 0.45f
 
-    fun draw(claude: Look, codex: Look, l: Layers) {
+    fun draw(strands: List<ThreadStrand>, l: Layers, fancy: Boolean) {
+        val count = strands.size
+        if (count < 2) return
         val w = l.w.toFloat()
         val h = l.h.toFloat()
         val acc = l.accCanvas
         val pad = h * 0.16f
-        val sw = h * 0.06f
+        // The card's strands are finer than the widget's (a quarter thinner than they were).
+        val sw = h * (if (fancy) 0.049f else 0.06f)
         val x0 = pad + sw
         val x1 = w - pad - sw
         val cy = h / 2
         // A low, long wave: the threads cross at a shallow angle (about 28°).
-        val amp = (h / 2 - pad - sw / 2) * 0.6f
+        val amp = (h / 2 - pad - sw / 2) * (if (fancy) 0.8f else 0.6f)
         if (x1 <= x0 || amp <= 0f) return
-        // A whole number of half twists, so both ends meet at a crossing.
+        // A whole number of half twists, so the slices end exactly at x1.
         val n = ((x1 - x0) / (amp * 6f)).roundToInt().coerceAtLeast(1)
         val half = (x1 - x0) / n
 
-        fun y(sign: Float, x: Float) = cy + sign * amp * sin(Math.PI * (x - x0) / half).toFloat()
-        fun path(sign: Float, from: Float, to: Float) = Path().apply {
-            moveTo(from, y(sign, from))
+        // Strand i is offset by i/count of a turn. Every pair crosses twice a
+        // turn, so crossings come every half / pairs, the first at `first`.
+        val pairs = count * (count - 1) / 2
+        val slice = half / pairs
+        val first = x0 + half * (0.5f - 1f / count)
+        fun y(i: Int, x: Float) = cy + amp * sin(Math.PI * (x - x0) / half + Math.PI + 2 * Math.PI * i / count).toFloat()
+        fun path(i: Int, from: Float, to: Float) = Path().apply {
+            moveTo(from, y(i, from))
             var x = from
             while (x < to) {
                 x = min(x + 1f, to)
-                lineTo(x, y(sign, x))
+                lineTo(x, y(i, x))
             }
         }
-        class Strand(val look: Look, sign: Float) {
-            val color = Render.accent(look.provider)
-            val alpha = if (look.stale) STALE else 1f
-            val paired = look.mode != Mode.UNPAIRED && look.mode != Mode.WAITING && look.week != null
-            val path = path(sign, x0, x1)
-            private val split = x0 + (if (paired) look.weekLeft / 100f else 0f) * (x1 - x0)
+        class Line(val index: Int, s: ThreadStrand) {
+            val color = s.color
+            val alpha = if (s.stale) STALE else 1f
+            val path = path(index, x0, x1)
+            val split = x0 + (s.left ?: 0f).coerceIn(0f, 1f) * (x1 - x0)
             // Separate paths with butt ends, so bright meets faint square to the thread.
-            private val lit = if (split > x0) path(sign, x0, split) else null
-            private val spent = if (split < x1) path(sign, split, x1) else null
+            val lit = if (split > x0) path(index, x0, split) else null
+            val spent = if (split < x1) path(index, split, x1) else null
 
             fun drawIn(left: Float, right: Float) {
                 acc.save()
                 acc.clipRect(left, 0f, right, h)
                 lit?.let { acc.drawPath(it, stroke(color, sw, alpha, round = false)) }
-                spent?.let { acc.drawPath(it, stroke(color, sw, alpha * SPENT, round = false)) }
+                spent?.let {
+                    // The card's ghost is finer, so the bright stretches lead.
+                    if (fancy) acc.drawPath(it, stroke(color, sw * 0.55f, alpha * 0.32f, round = false))
+                    else acc.drawPath(it, stroke(color, sw, alpha * SPENT, round = false))
+                }
                 acc.restore()
             }
         }
-        val a = Strand(claude, -1f)
-        val b = Strand(codex, 1f)
+        val lines = strands.mapIndexed { i, s -> Line(i, s) }
         val moat = Paint(CLEAR).apply { strokeWidth = sw * 2.2f }
 
         // One slice per crossing, cut where the threads are furthest apart. In
-        // each, the lower thread first, then a gap cleared around the upper one,
-        // then the upper one. The cuts are on whole pixels, so slices tile cleanly.
-        for (k in 0..n) {
-            val left = if (k == 0) 0f else (x0 + (k - 0.5f) * half).roundToInt().toFloat()
-            val right = if (k == n) w else (x0 + (k + 0.5f) * half).roundToInt().toFloat()
+        // each, the strands not crossing first, then the lower of the pair, then
+        // a gap cleared around the upper one, then the upper one. The cuts are
+        // on whole pixels, so slices tile cleanly.
+        val last = generateSequence(0) { it + 1 }.takeWhile { first + it * slice <= x1 + 0.5f }.last()
+        for (k in 0..last) {
+            val centre = first + k * slice
+            val left = if (k == 0) 0f else (centre - slice / 2).roundToInt().toFloat()
+            val right = if (k == last) w else (centre + slice / 2).roundToInt().toFloat()
+            // The pair crossing here is the closest two at the middle of the slice.
+            val (a, b) = lines.flatMap { p -> lines.filter { it.index > p.index }.map { p to it } }
+                .minBy { (p, q) -> abs(y(p.index, centre) - y(q.index, centre)) }
             val (under, over) = if (k % 2 == 0) b to a else a to b
+            lines.filter { it !== a && it !== b }.forEach { it.drawIn(left, right) }
             under.drawIn(left, right)
             acc.save()
             acc.clipRect(left, 0f, right, h)
-            acc.drawPath(over.path, moat)
+            if (fancy) {
+                // The fine ghost only needs a gap as fine as itself.
+                over.lit?.let { acc.drawPath(it, moat) }
+                over.spent?.let { acc.drawPath(it, Paint(moat).apply { strokeWidth = sw * 1.5f }) }
+            } else acc.drawPath(over.path, moat)
             acc.restore()
             over.drawIn(left, right)
+        }
+
+        // A bead where each thread's week runs out: "you are here", cut clear of what's under it.
+        // Every cut first, then every bead, so two beads that meet both stay whole.
+        if (fancy) {
+            val beads = lines.filter { it.split > x0 && it.split < x1 }
+            // Sized as before the strands were thinned, so "you are here" still reads.
+            beads.forEach { acc.drawCircle(it.split, y(it.index, it.split), sw * 2.3f, Paint(CLEAR).apply { style = Paint.Style.FILL }) }
+            beads.forEach { acc.drawCircle(it.split, y(it.index, it.split), sw * 1.4f, fill(it.color, it.alpha)) }
         }
     }
 }

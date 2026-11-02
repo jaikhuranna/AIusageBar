@@ -53,7 +53,7 @@ func wireOf(s snapshot) wireSnapshot {
 		provider = "claude"
 	}
 	return wireSnapshot{
-		Provider: provider, SourceError: s.sourceError, CostAvailable: provider == "claude",
+		Provider: provider, SourceError: s.sourceError, Account: s.account, CostAvailable: provider == "claude",
 		CacheFetchedAt: fetched,
 		Schema:         schemaVersion,
 		FiveHour:       toWire(s.fiveHour),
@@ -110,10 +110,13 @@ func newMux(token string, m *monitor) *http.ServeMux {
 		if !ok {
 			return
 		}
-		if provider == "codex" {
+		switch {
+		case provider == "codex":
 			m.pollCodex()
-		} else {
+		case provider == "claude":
 			m.freshen()
+		default:
+			m.pollHub()
 		}
 		snap, etag := m.latestFor(provider)
 		w.Header().Set("ETag", etag)
@@ -136,6 +139,8 @@ func newMux(token string, m *monitor) *http.ServeMux {
 		}
 		usage(w, r)
 	})
+
+	mux.HandleFunc("/pool", poolHandler(token, m))
 
 	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
 		if !authorized(r, token, m) {
@@ -405,7 +410,7 @@ func requestProvider(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if p == "" {
 		p = "claude"
 	}
-	if p != "claude" && p != "codex" {
+	if p != "codex" && !isClaudeProvider(p) {
 		http.Error(w, "unknown provider", http.StatusBadRequest)
 		return "", false
 	}

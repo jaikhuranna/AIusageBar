@@ -15,16 +15,23 @@ the Android, Wear OS and iOS clients. Closing a client must never stop the serve
 - `internal/bridge/` — server implementation and its tests:
   - `sources.go` — Claude cache/transcript readers, pricing, collected snapshot.
   - `codex.go` — official CLI app-server quota reader; no inference.
+  - `hub.go` — optional CLIProxyAPI hub source (`-cliproxy-url`): per-account Claude limits for `claude`/`claude2`.
+  - `pool.go` — `/pool`: pooled limit across a family's accounts (totals, burn,
+    7-day projection with reset step-ups) and its persisted history.
   - `monitor.go` — one sampler, cached snapshots and the alert state machine.
-  - `server.go` — `/usage`, `/events`, `/pair`, `/healthz`, opt-in `/share`.
+  - `server.go` — `/usage`, `/pool`, `/events`, `/pair`, `/healthz`, opt-in `/share`.
   - `control.go`, `pair.go` — local socket minting for `aiusage-server -pair`.
   - `state.go` — existing `$XDG_STATE_HOME/aiusagebar/state.json` (0600).
   - `refresh.go`, `mdns.go` — source refresh and LAN discovery.
-- `internal/protocol/` — shared wire snapshot; no server or GUI dependencies.
+- `internal/protocol/` — shared wire types (`usage.go` snapshot, `pool.go` `/pool`); no server or GUI dependencies.
 - `internal/client/` — HTTP client, provider caches, one-time-code pairing,
   private tray config. Never reads provider/server files or starts their CLIs.
 - `internal/tray/`, root `main.go` — Linux tray renderer and client flags.
   The tray stores only its device token/settings in the user config directory.
+  `format.go` holds every label, menu line and the icon as pure, tested
+  functions; `tray.go` only wires them to systray. It polls all three
+  providers (`claude`, `claude2`, `codex`); the saved choice (`pool` or one
+  provider, `client.Pool`/`ValidChoice`) only picks what the panel label shows.
 - `deploy/aiusage-server.service` — independent user service example.
 - `aiusagebar.desktop` — tray-only desktop autostart entry.
 - `scripts/setup-tunnel.sh` — independent Cloudflare tunnel/server services.
@@ -73,14 +80,33 @@ When the deployment changes (URL, tunnel, flags, how it starts), update
   reads no server state and calls no provider CLIs. Keep pairing codes local to
   the server; a tray is an ordinary paired HTTP client.
 - **Provider selection is additive.** `/usage`, `/events` and `/share` accept
-  `provider=claude|codex`; omitted means Claude. Keep caches, ETags, alert
-  arming and client comeback state isolated. Codex costs are unavailable.
+  `provider=claude|claude2|codex`; omitted means Claude. Keep caches, ETags, alert
+  arming and client comeback state isolated. Codex and `claude2` costs are
+  unavailable (transcripts are pooled; the cost stays on `claude`).
+  `claude2` exists only in hub mode (`claude2` without a hub is a `source_error`);
+  more accounts mean one more name in `claudeProviders` (`hub.go`).
   Honor `window_minutes`, `source_error` and `cache_fetched_at` on every client.
+- **`/pool` is a family view, not a provider.** `family=claude|codex`; Claude is
+  every hub account (just `claude` without a hub), Codex a pool of one. Math is
+  in account-percent (one account = 100) and lives in pure functions in
+  `pool.go` (`buildPool`, `projectPool`, `poolBurn`) so it tests without a
+  clock. History is appended by the poll loop and by `/pool` itself, never
+  denser than 5 min, 14-day retention, in
+  `$XDG_STATE_HOME/aiusagebar/pool-history-<family>.jsonl` (0600). Accounts
+  with no data are left out (`accounts: 0` + `source_error` when none have any).
+  Its ETag hashes inputs plus a 15-minute bucket, never the body (the projection
+  is re-anchored at every request).
 - **Data sources are read-only and local.** Never write to `~/.claude.json` or
   the transcript files; they belong to Claude Code. To get fresher limits,
   `internal/bridge/refresh.go` runs the official CLI's local `/usage` command, which makes
   Claude Code fetch and rewrite its own cache. The bridge never calls
   Anthropic itself, and never uses the OAuth token (Consumer Terms).
+  **Hub mode is the one exception to "local files":** with `-cliproxy-url` and
+  `-cliproxy-key-file`, limits come from a local CLIProxyAPI hub (`hub.go`),
+  polled at most every 5 min, and the `claude -p /usage` refresher is skipped.
+  The server still never calls Anthropic or holds an OAuth token: the *hub*
+  calls Anthropic's usage endpoint on each account's token. The management key
+  is read from the key file on each poll and never logged or put in an error.
 - **`GET /usage` is the refresh.** A stale cache (older than
   `-refresh-min-age`, default 1m) is refreshed before the answer, at most once
   per that interval, with concurrent requests sharing it. Don't add a separate
@@ -117,6 +143,9 @@ When the deployment changes (URL, tunnel, flags, how it starts), update
 - **Count each reply once.** Transcripts repeat a reply's usage on every
   content-block line; `costSince` dedupes by `message.id:requestId` across all
   files. Removing that roughly doubles every cost figure.
+- **getlantern/systray re-shows a hidden item on every update** (its Linux C
+  code calls `gtk_widget_show` in each title/check change). The tray's `set`
+  and `check` helpers re-hide; use them, not `SetTitle`/`Check` directly.
 - Keep `README.md` and this file in sync when flags, sources, or the wire format
   change.
 

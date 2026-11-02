@@ -13,7 +13,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -30,7 +29,7 @@ func Run(args []string) error {
 	server := f.String("server", "", "server base URL; defaults to saved address or http://127.0.0.1:8765")
 	pair := f.String("pair", "", "one-time code from aiusage-server -pair; saves this client and exits")
 	token := f.String("token", "", "use an existing server token instead of pairing; saved privately")
-	provider := f.String("provider", "", "initial provider: claude or codex (saved)")
+	provider := f.String("provider", "", "what the top bar shows: pool (both Claude accounts), claude, claude2 or codex (saved)")
 	check := f.Bool("check", false, "fetch usage once as JSON without opening the tray")
 	if err := f.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -54,8 +53,8 @@ func Run(args []string) error {
 		cfg.Token = *token
 	}
 	if *provider != "" {
-		if !client.ValidProvider(*provider) {
-			return errors.New("-provider must be claude or codex")
+		if !client.ValidChoice(*provider) {
+			return errors.New("-provider must be pool, claude, claude2 or codex")
 		}
 		cfg.Provider = *provider
 	}
@@ -83,46 +82,104 @@ func Run(args []string) error {
 		return err
 	}
 	if *check {
-		r := api.Fetch(ctx, cfg.Provider)
+		return checkOnce(ctx, api, cfg.Provider)
+	}
+	t := &tray{cfg: cfg, configPath: *configPath, api: api, ctx: ctx,
+		readings: map[string]client.Reading{}, titles: map[*systray.MenuItem]string{}, visible: map[*systray.MenuItem]bool{}}
+	systray.Run(t.ready, stop)
+	return nil
+}
+
+// checkOnce prints one snapshot, or an array of both Claude accounts for the pool.
+func checkOnce(ctx context.Context, api *client.Client, choice string) error {
+	if choice != client.Pool {
+		r := api.Fetch(ctx, choice)
 		if r.Err != nil {
 			return r.Err
 		}
 		return json.NewEncoder(os.Stdout).Encode(r.Snapshot)
 	}
-	t := &tray{cfg: cfg, configPath: *configPath, api: api, ctx: ctx}
-	systray.Run(t.ready, stop)
-	return nil
+	var out []*protocol.Snapshot
+	for _, p := range []string{"claude", "claude2"} {
+		r := api.Fetch(ctx, p)
+		if r.Err != nil {
+			return fmt.Errorf("%s: %w", p, r.Err)
+		}
+		out = append(out, r.Snapshot)
+	}
+	return json.NewEncoder(os.Stdout).Encode(out)
+}
+
+type section struct {
+	header, five, week, issue *systray.MenuItem
 }
 
 type tray struct {
-	cfg                                                                                   client.Config
-	configPath                                                                            string
-	api                                                                                   *client.Client
-	ctx                                                                                   context.Context
-	provider, session, week, costToday, costSession, costWeek, status, age, refresh, quit *systray.MenuItem
+	cfg        client.Config
+	configPath string
+	api        *client.Client
+	ctx        context.Context
+
+	// Owned by loop: only it reads readings or touches menu items.
+	readings map[string]client.Reading
+	seen2    bool // the server has delivered limits for a second Claude account
+	titles   map[*systray.MenuItem]string
+	visible  map[*systray.MenuItem]bool
+
+	sections           map[string]*section
+	costHead, costBody *systray.MenuItem
+	status, chooser    *systray.MenuItem
+	choices            map[string]*systray.MenuItem
+	refresh, quit      *systray.MenuItem
+	picks              chan string
+}
+
+type fetched struct {
+	provider string
+	reading  client.Reading
 }
 
 func (t *tray) ready() {
 	systray.SetTitle("AI usage …")
 	systray.SetTooltip("AIusageBar client")
-	systray.SetIcon(icon(-1))
-	t.provider = systray.AddMenuItem("Switch provider", "Choose Claude or Codex")
-	t.session = systray.AddMenuItem("Primary limit: …", "")
-	t.week = systray.AddMenuItem("Secondary limit: …", "")
-	t.session.Disable()
-	t.week.Disable()
+	systray.SetIcon(icon([]gauge{{}, {}}))
+	t.picks = make(chan string)
+	t.sections = map[string]*section{}
+	for _, id := range providerIDs {
+		// The Claude accounts form one group, so a hidden second account
+		// can never leave two separators touching.
+		if id == "codex" {
+			systray.AddSeparator()
+		}
+		s := &section{
+			header: systray.AddMenuItem(id, "Show this in the top bar"),
+			five:   systray.AddMenuItem("", ""),
+			week:   systray.AddMenuItem("", ""),
+			issue:  systray.AddMenuItem("", ""),
+		}
+		s.five.Disable()
+		s.week.Disable()
+		s.issue.Disable()
+		s.issue.Hide()
+		t.sections[id] = s
+		t.forward(s.header, id)
+	}
 	systray.AddSeparator()
-	t.costToday = systray.AddMenuItem("API-cost equivalent today: …", "")
-	t.costSession = systray.AddMenuItem("API-cost equivalent this session: …", "")
-	t.costWeek = systray.AddMenuItem("API-cost equivalent this week: …", "")
-	t.costToday.Disable()
-	t.costSession.Disable()
-	t.costWeek.Disable()
-	systray.AddSeparator()
+	t.costHead = systray.AddMenuItem("", "")
+	t.costBody = systray.AddMenuItem("", "")
+	t.costHead.Disable()
+	t.costBody.Disable()
+	t.costHead.Hide()
+	t.costBody.Hide()
 	t.status = systray.AddMenuItem("Connecting to server…", "")
-	t.age = systray.AddMenuItem("Waiting for data", "")
 	t.status.Disable()
-	t.age.Disable()
+	systray.AddSeparator()
+	t.chooser = systray.AddMenuItem("Top bar shows", "Choose what the panel label shows")
+	t.choices = map[string]*systray.MenuItem{}
+	for _, id := range append([]string{client.Pool}, providerIDs...) {
+		t.choices[id] = t.chooser.AddSubMenuItemCheckbox(id, "", false)
+		t.forward(t.choices[id], id)
+	}
 	t.refresh = systray.AddMenuItem("Refresh", "Fetch the server's latest usage")
 	t.quit = systray.AddMenuItem("Quit", "Quit this client; the server keeps running")
 	go func() {
@@ -135,98 +192,160 @@ func (t *tray) ready() {
 	go t.loop()
 }
 
-// One client loop owns selection and rendering, so a late request cannot draw
-// one provider's cached values under the other provider's name.
+func (t *tray) forward(item *systray.MenuItem, choice string) {
+	go func() {
+		for {
+			select {
+			case <-t.ctx.Done():
+				return
+			case <-item.ClickedCh:
+				select {
+				case t.picks <- choice:
+				case <-t.ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+}
+
+// One loop owns the state and all drawing; a separate fetcher keeps a slow
+// Claude refresh from blocking clicks. The client keeps per-provider caches,
+// so one provider's values can never be drawn under another's name.
 func (t *tray) loop() {
+	results := make(chan fetched)
+	kick := make(chan struct{}, 1)
+	go func() {
+		for {
+			select {
+			case <-t.ctx.Done():
+				return
+			case <-kick:
+			}
+			for _, id := range providerIDs {
+				r := t.api.Fetch(t.ctx, id)
+				select {
+				case results <- fetched{id, r}:
+				case <-t.ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	poll := func() {
+		select {
+		case kick <- struct{}{}:
+		default: // a round is already queued
+		}
+	}
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	refresh := func() {
-		t.render(client.Reading{Err: errors.New("Connecting to server…")})
-		t.render(t.api.Fetch(t.ctx, t.cfg.Provider))
-	}
-	refresh()
+	poll()
+	t.render()
 	for {
 		select {
 		case <-t.ctx.Done():
 			return
 		case <-ticker.C:
-			t.render(t.api.Fetch(t.ctx, t.cfg.Provider))
+			poll()
 		case <-t.refresh.ClickedCh:
-			t.render(t.api.Fetch(t.ctx, t.cfg.Provider))
-		case <-t.provider.ClickedCh:
-			if t.cfg.Provider == "codex" {
-				t.cfg.Provider = "claude"
-			} else {
-				t.cfg.Provider = "codex"
+			poll()
+		case f := <-results:
+			t.readings[f.provider] = f.reading
+			if f.provider == "claude2" && f.reading.Snapshot != nil &&
+				(f.reading.Snapshot.FiveHour != nil || f.reading.Snapshot.SevenDay != nil) {
+				t.seen2 = true
 			}
-			if err := client.Save(t.configPath, t.cfg); err != nil {
-				log.Print("Could not save tray provider selection")
+		case p := <-t.picks:
+			if p != t.cfg.Provider {
+				t.cfg.Provider = p
+				if err := client.Save(t.configPath, t.cfg); err != nil {
+					log.Print("Could not save tray provider selection")
+				}
 			}
-			refresh()
 		}
+		t.render()
 	}
 }
 
-func (t *tray) render(r client.Reading) {
+// set skips unchanged titles, so an open menu doesn't flicker every poll.
+func (t *tray) set(item *systray.MenuItem, title string) {
+	if t.titles[item] != title {
+		t.titles[item] = title
+		item.SetTitle(title)
+		t.rehide(item)
+	}
+}
+
+// check restates a check mark; GTK flips one on click by itself.
+func (t *tray) check(item *systray.MenuItem, on bool) {
+	if on {
+		item.Check()
+	} else {
+		item.Uncheck()
+	}
+	t.rehide(item)
+}
+
+// systray's Linux backend shows an item on every update, hidden or not.
+func (t *tray) rehide(item *systray.MenuItem) {
+	if v, ok := t.visible[item]; ok && !v {
+		item.Hide()
+	}
+}
+
+func (t *tray) show(item *systray.MenuItem, on bool) {
+	if v, ok := t.visible[item]; ok && v == on {
+		return
+	}
+	t.visible[item] = on
+	if on {
+		item.Show()
+	} else {
+		item.Hide()
+	}
+}
+
+func (t *tray) render() {
 	if t.ctx.Err() != nil {
 		return
 	}
-	name, other := "Claude", "Codex"
-	if t.cfg.Provider == "codex" {
-		name, other = "Codex", "Claude"
+	now := time.Now()
+	v := view{entries: map[string]entry{}, two: t.seen2, pick: t.cfg.Provider}
+	for id, r := range t.readings {
+		v.entries[id] = entryOf(r, now)
 	}
-	t.provider.SetTitle("Show " + other)
-	s := protocol.Snapshot{Provider: t.cfg.Provider}
-	if r.Snapshot != nil {
-		s = *r.Snapshot
+	label, gauges := v.panel()
+	systray.SetTitle(label)
+	systray.SetIcon(icon(gauges))
+	status := v.status(now)
+	systray.SetTooltip(label + " | " + status)
+
+	for _, id := range providerIDs {
+		s := t.sections[id]
+		visible := v.visible(id)
+		five, week, issue := v.rows(id, now)
+		t.set(s.header, v.header(id))
+		t.set(s.five, five)
+		t.set(s.week, week)
+		t.set(s.issue, issue)
+		t.show(s.header, visible)
+		t.show(s.five, visible)
+		t.show(s.week, visible && week != "")
+		t.show(s.issue, visible && issue != "")
 	}
-	fh, wk := "--", "--"
-	if s.FiveHour != nil {
-		fh = fmt.Sprintf("%d%%", s.FiveHour.Utilization)
+	head, body, ok := v.cost()
+	t.set(t.costHead, head)
+	t.set(t.costBody, body)
+	t.show(t.costHead, ok)
+	t.show(t.costBody, ok)
+	t.set(t.status, status)
+
+	shown := v.shown()
+	for id, item := range t.choices {
+		t.set(item, v.name(id))
+		t.show(item, v.visible(id))
+		t.check(item, id == shown)
 	}
-	if s.SevenDay != nil {
-		wk = fmt.Sprintf("%d%%", s.SevenDay.Utilization)
-	}
-	status := "Connected to server"
-	if s.Host != "" {
-		status = "Connected to " + s.Host
-	}
-	if r.Err != nil {
-		status = r.Err.Error()
-	} else if s.SourceError != "" {
-		status = s.SourceError
-	}
-	age := "Waiting for data"
-	stale := r.Err != nil || s.SourceError != ""
-	if at := r.SourceTime(); !at.IsZero() {
-		d := max(time.Duration(0), time.Since(at))
-		age = "Source updated " + d.Round(time.Second).String() + " ago"
-		stale = stale || d > time.Hour
-	}
-	title := fmt.Sprintf("%s %s %s · %s %s", name, windowLabel(s.FiveHour, 300), fh, windowLabel(s.SevenDay, 10080), wk)
-	if stale && r.Snapshot != nil {
-		title += " · stale"
-	}
-	systray.SetTitle(title)
-	systray.SetTooltip(strings.Join([]string{title, status, age}, " | "))
-	percent := maxPercent(s)
-	if stale || (s.FiveHour == nil && s.SevenDay == nil) {
-		percent = -1
-	}
-	systray.SetIcon(icon(percent))
-	t.session.SetTitle(name + " " + windowLabel(s.FiveHour, 300) + " limit: " + fmtLimit(s.FiveHour))
-	t.week.SetTitle(name + " " + windowLabel(s.SevenDay, 10080) + " limit: " + fmtLimit(s.SevenDay))
-	t.status.SetTitle(status)
-	t.age.SetTitle(age)
-	if r.Snapshot == nil || !s.CostAvailable {
-		t.costToday.SetTitle(name + " API-cost equivalent: unavailable")
-		t.costSession.Hide()
-		t.costWeek.Hide()
-		return
-	}
-	t.costSession.Show()
-	t.costWeek.Show()
-	t.costToday.SetTitle("API-cost equivalent today: " + money(s.CostToday))
-	t.costSession.SetTitle("API-cost equivalent this session: " + money(s.CostSession))
-	t.costWeek.SetTitle("API-cost equivalent this week: " + money(s.CostWeek))
+	t.set(t.chooser, "Top bar shows: "+v.name(shown))
 }

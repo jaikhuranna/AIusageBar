@@ -151,3 +151,29 @@ func TestTransportPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestSavedChoiceCompatibility(t *testing.T) {
+	dir := t.TempDir()
+	if c, err := Load(filepath.Join(dir, "missing.json")); err != nil || c.Provider != Pool {
+		t.Fatalf("new config should show the pool: %+v %v", c, err)
+	}
+	for raw, want := range map[string]string{
+		`{"server":"http://127.0.0.1:8765","provider":"codex"}`:   "codex",
+		`{"server":"http://127.0.0.1:8765","provider":"claude"}`:  "claude",
+		`{"server":"http://127.0.0.1:8765","provider":"claude2"}`: "claude2",
+		`{"server":"http://127.0.0.1:8765","provider":"pool"}`:    Pool,
+		`{"server":"http://127.0.0.1:8765"}`:                      Pool,
+	} {
+		path := filepath.Join(dir, "client.json")
+		os.WriteFile(path, []byte(raw), 0600)
+		if c, err := Load(path); err != nil || c.Provider != want {
+			t.Errorf("%s: got %q %v", raw, c.Provider, err)
+		}
+	}
+	if ValidProvider(Pool) || !ValidProvider("claude2") || ValidChoice("gemini") {
+		t.Error("pool must never reach the wire; claude2 must")
+	}
+	if c, _ := New(Config{Server: "http://127.0.0.1:1", Token: "t"}); c.Fetch(context.Background(), Pool).Err == nil {
+		t.Error("pool fetched as a provider")
+	}
+}

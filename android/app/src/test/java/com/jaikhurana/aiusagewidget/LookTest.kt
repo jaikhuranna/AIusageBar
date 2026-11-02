@@ -121,6 +121,18 @@ class LookTest {
         assertEquals(Duration.ofMinutes(15), Plan.nextCheck(s, now, 0))
     }
 
+    @Test fun secondClaudeAccountKeepsItsEmailAndHasNoCost() {
+        val s = parseSnapshot("""{"provider":"claude2","account":"b@example.com","five_hour":{"utilization":25,"remaining":75},"seven_day":null,"cost_available":false}""")
+        assertEquals(UsageProvider.CLAUDE2, s.provider)
+        assertEquals("b@example.com", s.account)
+        assertFalse(s.costAvailable)
+        assertEquals("b@example.com", look(s).account)
+        assertEquals(UsageProvider.CLAUDE2, UsageProvider.fromWire("claude2"))
+        // Without cost_available the default is still per provider.
+        assertFalse(parseSnapshot("""{"provider":"claude2"}""").costAvailable)
+        assertEquals(null, parseSnapshot("""{"provider":"claude"}""").account)
+    }
+
     @Test fun codexWireFormatAndLegacyDefaults() {
         val s = parseSnapshot("""{"provider":"codex","five_hour":{"utilization":25,"remaining":75,"window_minutes":15},"seven_day":null,"cost_available":false,"source_error":"Unavailable"}""")
         assertEquals(UsageProvider.CODEX, s.provider)

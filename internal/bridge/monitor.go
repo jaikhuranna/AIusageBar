@@ -33,6 +33,9 @@ type monitor struct {
 	codexMu   sync.Mutex
 	codex     *codexSource
 	codexSnap wireSnapshot
+	hub       *hubSource
+	hubSnaps  map[string]wireSnapshot // claude2 and later; "claude" is snap
+	pools     map[string]*poolHistory // per family, see pool.go
 	st        *state
 	snap      wireSnapshot
 	etag      string
@@ -59,6 +62,10 @@ type monitor struct {
 }
 
 func newMonitor(thresholds []int, hysteresis int) *monitor {
+	pools := map[string]*poolHistory{}
+	for _, f := range poolFamilies {
+		pools[f] = loadPoolHistory(poolHistoryPath(f), time.Now())
+	}
 	initial := wireOf(snapshot{sourceError: "Waiting for the first server sample."})
 	return &monitor{
 		snap:       initial,
@@ -67,6 +74,8 @@ func newMonitor(thresholds []int, hysteresis int) *monitor {
 		thresholds: thresholds,
 		hysteresis: hysteresis,
 		pending:    map[string]time.Time{},
+		hubSnaps:   map[string]wireSnapshot{},
+		pools:      pools,
 		started:    time.Now(),
 	}
 }
@@ -92,6 +101,8 @@ func parseThresholds(s string) []int {
 func (m *monitor) run(ctx context.Context) {
 	m.poll()
 	m.pollCodex()
+	m.pollHub()
+	m.recordPools()
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
 	for {
@@ -101,18 +112,29 @@ func (m *monitor) run(ctx context.Context) {
 		case <-t.C:
 			m.poll()
 			m.pollCodex()
+			m.pollHub()
+			m.recordPools()
 		}
 	}
 }
 
 func (m *monitor) poll() {
-	s := gather() // the only place the transcripts get scanned
+	var s snapshot
+	if m.hub != nil {
+		// Limits come from the hub's first account; the cost is pooled.
+		s = withCost(m.hub.slot(0))
+	} else {
+		s = gather() // the only place the transcripts get scanned
+	}
 	w := wireOf(s)
 
 	m.mu.Lock()
 	m.snap = w
 	m.etag = etagOf(w)
-	fired := m.evaluateLocked(s, time.Now())
+	var fired []event
+	if s.sourceError == "" {
+		fired = m.evaluateLocked(s, time.Now())
+	}
 	if len(fired) > 0 {
 		if err := m.st.save(); err != nil {
 			log.Printf("state save: %v", err)
@@ -330,7 +352,7 @@ func (m *monitor) authRequired(shared string) bool {
 // A 304 means "your copy is still current as of now".
 func etagOf(w wireSnapshot) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "v%d|%s|%s|%s|%t|", schemaVersion, w.Host, w.Provider, w.SourceError, w.CostAvailable)
+	fmt.Fprintf(h, "v%d|%s|%s|%s|%s|%t|", schemaVersion, w.Host, w.Provider, w.SourceError, w.Account, w.CostAvailable)
 	// Source age is visible data. A successful upstream refresh must reach
 	// clients even when utilization is unchanged, or they eventually dim a
 	// perfectly fresh quota snapshot.
@@ -389,15 +411,46 @@ func (m *monitor) pollCodex() {
 	m.mu.Unlock()
 }
 
+// pollHub samples the hub's accounts after the first, which have no cost
+// figure of their own. The hub itself limits how often it is really asked.
+func (m *monitor) pollHub() {
+	if m.hub == nil {
+		return
+	}
+	for i := 1; i < len(claudeProviders); i++ {
+		s := m.hub.slot(i)
+		m.mu.Lock()
+		m.hubSnaps[s.provider] = wireOf(s)
+		if s.sourceError == "" {
+			if fired := m.evaluateProviderLocked(s, time.Now(), s.provider); len(fired) > 0 {
+				if err := m.st.save(); err != nil {
+					log.Printf("state save: %v", err)
+				}
+			}
+		}
+		m.mu.Unlock()
+	}
+}
+
 func (m *monitor) latestFor(provider string) (wireSnapshot, string) {
-	if provider != "codex" {
+	if provider == "claude" {
 		return m.latest()
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.codexSnap
-	if s.Provider == "" {
+	switch {
+	case provider == "codex" && s.Provider == "":
 		s = wireOf(snapshot{provider: "codex", sourceError: "Waiting for Codex on the desktop."})
+	case provider != "codex":
+		s = m.hubSnaps[provider]
+		if s.Provider == "" {
+			msg := "Waiting for the first hub sample."
+			if m.hub == nil {
+				msg = "Needs the CLIProxyAPI hub: start the server with -cliproxy-url."
+			}
+			s = wireOf(snapshot{provider: provider, sourceError: msg})
+		}
 	}
 	return s, etagOf(s)
 }
