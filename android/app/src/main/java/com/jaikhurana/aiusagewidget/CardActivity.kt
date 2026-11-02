@@ -453,7 +453,7 @@ private fun FamilySummary(view: FamilyView, now: Instant, fg: Color) {
                         Spacer(Modifier.width(6.dp))
                         Label(durationLabel(length), fg, 0.45f, Modifier.alignByBaseline(), size = 11.sp)
                     }
-                    SegmentBar(meter, view.family, fg, Modifier.fillMaxWidth().height(4.dp), slim = true)
+                    SegmentBar(meter, view.family, fg, Modifier.fillMaxWidth().height(6.dp), slim = true)
                     ResetLine(comebackLine(meter, now), meter.comeback != null, fg.copy(alpha = 0.55f), 12.sp)
                 }
             }

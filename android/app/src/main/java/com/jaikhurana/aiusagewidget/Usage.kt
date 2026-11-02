@@ -225,8 +225,12 @@ fun SegmentBar(meter: Meter, family: PoolFamily, fg: Color, modifier: Modifier, 
             val color = Color(Render.memberColor(family, i))
             val litW = (seg.left ?: 0f).coerceIn(0f, 1f) * w
             clipPath(shape) {
-                drawRect(fg.copy(alpha = if (slim) 0.1f else 0.05f), Offset(span.start, 0f), Size(w, size.height))
-                if (!slim) clipRect(span.start + litW, 0f, span.endInclusive, size.height) { dotGrid(span.start, w, fg.copy(alpha = 0.22f)) }
+                // The spent stretch is the widgets' dot-matrix: a grid, or one row of dots when slim.
+                if (!slim) drawRect(fg.copy(alpha = 0.05f), Offset(span.start, 0f), Size(w, size.height))
+                clipRect(span.start + litW, 0f, span.endInclusive, size.height) {
+                    if (slim) dotGrid(span.start, w, fg.copy(alpha = 0.3f), pitch = size.height + 2.dp.toPx(), r = size.height * 0.36f)
+                    else dotGrid(span.start, w, fg.copy(alpha = 0.22f))
+                }
                 if (litW > 0f) drawRect(color.copy(alpha = if (slim) 1f else 0.88f), Offset(span.start, 0f), Size(litW, size.height))
             }
             if (!slim) seg.timeLeft?.takeIf { seg.left != null }?.let { t ->
@@ -251,10 +255,8 @@ fun SegmentBar(meter: Meter, family: PoolFamily, fg: Color, modifier: Modifier, 
 }
 
 /** The spent stretch's texture: a fine grid of dots, the widgets' dot-matrix at small size. */
-private fun DrawScope.dotGrid(left: Float, width: Float, color: Color) {
-    val pitch = 4.dp.toPx()
-    val r = 0.8.dp.toPx()
-    var y = pitch / 2 + (size.height % pitch) / 2
+private fun DrawScope.dotGrid(left: Float, width: Float, color: Color, pitch: Float = 4.dp.toPx(), r: Float = 0.8.dp.toPx()) {
+    var y = if (pitch > size.height) size.height / 2 else pitch / 2 + (size.height % pitch) / 2
     while (y < size.height) {
         var x = left + pitch / 2
         while (x < left + width) {

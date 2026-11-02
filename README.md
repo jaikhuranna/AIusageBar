@@ -7,14 +7,7 @@ It runs without a desktop or GTK. `aiusagebar` is the Linux GNOME tray client;
 like the [Wear OS app](wearos/), [Android widgets](android/) and [iOS widgets](ios/),
 it reads the server over HTTP. Closing any client leaves the server running.
 
-```mermaid
-flowchart LR
-    Sources[Local provider CLIs and usage caches] --> Server[Go usage server]
-    Server --> Linux[Linux tray client]
-    Server --> Android[Android app and widgets]
-    Server --> Watch[Wear OS]
-    Server --> iOS[iOS app and widgets]
-```
+<p align="center"><img src="docs/architecture.svg" width="760" alt="Local provider CLIs and usage caches feed the Go usage server, which serves the Linux tray, Android, Wear OS and iOS clients"></p>
 
 | Wear OS: session | Wear OS: week |
 | :---: | :---: |

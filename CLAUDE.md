@@ -41,6 +41,8 @@ the Android, Wear OS and iOS clients. Closing a client must never stop the serve
   `android/CLAUDE.md` → Build and install).
   Pure widget rules remain in step across Android/Wear and `ios/Core/`.
 - `docs/screenshots/` — app-only screenshots; exclude deployment URLs/addresses.
+- `docs/architecture.svg` — the README's diagram, a hand-written SVG (light and
+  dark via `prefers-color-scheme`) rather than Mermaid, which many viewers don't render.
 - `CLAUDE.local.md` — gitignored live deployment details; never publish them.
 
 ## Build and run

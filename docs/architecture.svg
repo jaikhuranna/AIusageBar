@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="230" viewBox="0 0 760 230" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14">
+  <title>Local provider CLIs and usage caches feed the Go usage server, which serves the Linux tray, Android, Wear OS and iOS clients</title>
+  <style>
+    .box { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.5; }
+    .hub { fill: #fbeee9; stroke: #d97757; stroke-width: 1.5; }
+    .txt { fill: #1f2328; }
+    .dim { fill: #59636e; font-size: 12px; }
+    .wire { fill: none; stroke: #8c959f; stroke-width: 1.5; }
+    .head { fill: #8c959f; }
+    @media (prefers-color-scheme: dark) {
+      .box { fill: #161b22; stroke: #3d444d; }
+      .hub { fill: #2b1d18; stroke: #d97757; }
+      .txt { fill: #e6edf3; }
+      .dim { fill: #9198a1; }
+      .wire { stroke: #6e7681; }
+      .head { fill: #6e7681; }
+    }
+  </style>
+  <!-- Source -->
+  <rect class="box" x="10" y="87" width="200" height="56" rx="10"/>
+  <text class="txt" x="110" y="111" text-anchor="middle">Local provider CLIs</text>
+  <text class="txt" x="110" y="130" text-anchor="middle">and usage caches</text>
+
+  <!-- Server -->
+  <rect class="hub" x="270" y="87" width="170" height="56" rx="10"/>
+  <text class="txt" x="355" y="111" text-anchor="middle" font-weight="600">Go usage server</text>
+  <text class="dim" x="355" y="130" text-anchor="middle">aiusage-server</text>
+
+  <path class="wire" fill="none" d="M210,115 L262,115"/>
+
+  <!-- Clients -->
+  <path class="wire" fill="none" d="M440,115 C480,115 480,32 512,32"/>
+  <path class="wire" fill="none" d="M440,115 C480,115 480,87 512,87"/>
+  <path class="wire" fill="none" d="M440,115 C480,115 480,143 512,143"/>
+  <path class="wire" fill="none" d="M440,115 C480,115 480,198 512,198"/>
+
+  <path class="head" d="M259,110.5 L268,115 L259,119.5 z"/>
+  <path class="head" d="M510,27.5 L519,32 L510,36.5 z"/>
+  <path class="head" d="M510,82.5 L519,87 L510,91.5 z"/>
+  <path class="head" d="M510,138.5 L519,143 L510,147.5 z"/>
+  <path class="head" d="M510,193.5 L519,198 L510,202.5 z"/>
+
+  <rect class="box" x="520" y="12" width="230" height="40" rx="10"/>
+  <text class="txt" x="635" y="37" text-anchor="middle">Linux tray client</text>
+  <rect class="box" x="520" y="67" width="230" height="40" rx="10"/>
+  <text class="txt" x="635" y="92" text-anchor="middle">Android app and widgets</text>
+  <rect class="box" x="520" y="123" width="230" height="40" rx="10"/>
+  <text class="txt" x="635" y="148" text-anchor="middle">Wear OS</text>
+  <rect class="box" x="520" y="178" width="230" height="40" rx="10"/>
+  <text class="txt" x="635" y="203" text-anchor="middle">iOS app and widgets</text>
+</svg>

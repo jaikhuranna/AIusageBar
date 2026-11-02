@@ -56,7 +56,7 @@ session graph; weekly projection and burn figures are not drawn.
   with the pool half full → GO. No accounts or no data → "…". A sliver never
   rounds to an empty ring, nor almost-full to a closed one.
 - **The tap card** (`CardActivity`) never scrolls: per family two columns
-  (5h and 7d: big %, a slim per-account bar, the comeback line), then a compact
+  (5h and 7d: big %, a slim per-account bar whose spent stretch is a row of dots like the app's bars, the comeback line), then a compact
   five-hour history graph with a remembered Claude | Codex toggle, then every
   account's week as threads ("7D · ALL"), then Refresh / Open app. The graph
   uses a coloured pooled line (0–100%, matching the headline), gradient fill,
