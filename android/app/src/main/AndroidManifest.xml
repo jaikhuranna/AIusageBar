@@ -48,9 +48,9 @@
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_ring_large" />
         </receiver>
-        <receiver android:name=".MatrixWidget" android:exported="true" android:label="@string/widget_matrix">
+        <receiver android:name=".OrbitWidget" android:exported="true" android:label="@string/widget_orbit">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_matrix" />
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_orbit" />
         </receiver>
         <receiver android:name=".DashWidget" android:exported="true" android:label="@string/widget_dash">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>

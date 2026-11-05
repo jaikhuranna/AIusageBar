@@ -74,7 +74,7 @@ session graph; weekly projection and burn figures are not drawn.
 | --- | --- | --- |
 | Pool | 1x1 | The original ring, for every account of the selected family pooled: spendable now as the ring, the pooled week as the pie. Without `/pool`, the selected provider's own ring. |
 | Claude ring, large | 2x2 | Round face. Weekly left is the pie in the middle, the 5h session is the ring around it. All Claude orange. |
-| Claude matrix | 2x2 | An LED dot panel: the session's % left set in type in a window cut out of the dots, small dot labels (5h reset in the corner), the week as a dot bar. |
+| AI orbit | 2x2 | The threads wound into concentric rings, one per family: Claude's accounts twisted round the outer circle, Codex's round the inner one (a lone account is a plain circle). Each strand is bright clockwise from 12 o'clock for its week left, with a bead where bright meets faint. No figures. Replaced the dot-matrix 2x2 (decommissioned on Android and iOS). |
 | Claude dash | 4x2 | The most urgent number on the left; both windows on the right as dot bars with a "time left" tick, reset times, and a pace estimate ("LASTS" / "EMPTY IN ~1H"). |
 | AI threads | 4x1 (resizes to 5x1) | Every account's weekly limit as threads twisted round each other, left to right, in `Render.memberColor` order: Claude's accounts orange, tan, then further shades; Codex green (two strands are opposite; three are a third of a turn apart). A family with no accounts keeps one faint thread. Each is bright for the share of its week left and faint (not gone) where it's been used. No figures: a low, long wave, so the crossings are few and shallow (about 28°). The card ends with the same threads. |
 
@@ -84,17 +84,27 @@ that family is stale. The card draws them `fancy`: a deeper twist, a fine ghost
 for the used stretch (with a gap cut only as wide as itself), a bead where
 bright meets faint, and strokes about 25% thinner than the earlier card.
 The weekly threads and session graph are static, with no glow or reveal.
-Crossings alternate over and under: each slice of
-`ThreadFace` draws the lower thread, clears a gap around the upper one, then
-draws the upper one, clipped on whole pixels so slices tile without seams.
-Bright and faint are separate butt-ended paths, so they meet square to the thread.
+Crossings go over and under like a rope seen from the side (`Braid.kt`, tested
+in `BraidTest`): strand `i` is a point on a turning circle, `2π·i/n` round, so
+its height is the sine and its nearness the cosine, and at every crossing one
+strand is clearly in front for any number of accounts. `ThreadFace` draws each
+strand whole, then at each crossing clears a gap round the front strand for as
+long as the two are close and draws it again. Never cut the braid into strips:
+strip edges leak a comb of slivers wherever a gap is cleared. Bright and faint
+are separate butt-ended paths, so they meet square to the thread. The orbit is
+the same braid on a closed path, with whole twists per turn so it closes. On
+the orbit each bright stretch fades in quickly at 12 o'clock (`Look.orbit`'s
+`fadeIn`, 7% of the turn) instead of starting on a hard edge, and its beads are
+smaller than the card's. Where a crossing redraws the front strand over its
+cleared gap, the bright redraw overlaps the strand by `SEAM` either side: two
+anti-aliased butt edges meeting on one line leave a hairline seam. The watch's
+orbit (`../wearos/`) and `../ios/Shared/Faces.swift` draw the same braid.
 
-States, shared by the ring, matrix and dash (`Mode` in `Look.kt`, highest priority first; the pooled 1x1 has its own `PoolState`):
+States, shared by the ring and dash (`Mode` in `Look.kt`, highest priority first; the pooled 1x1 has its own `PoolState`):
 
 - **UNPAIRED / WAITING** — "PAIR" or "...".
 - **WEEK_OUT** — everything grey, counting down to the weekly reset. The ring
-  is struck through like a no-entry sign; the matrix's diagonal passes behind
-  the countdown; the dash strikes only the spent bar. Never draw a strike over
+  is struck through like a no-entry sign; the dash strikes only the spent bar. Never draw a strike over
   text.
 - **SESSION_OUT** — the 5h ring/bar turns into yellow dots that drain as the
   reset nears, with an H:MM countdown.
@@ -115,8 +125,9 @@ States, shared by the ring, matrix and dash (`Mode` in `Look.kt`, highest priori
     the watch's own UI stays Claude/Codex).
   - `Bridge.kt` — the watch's client minus `/events`, plus `/pool` (404 → `NotFound`).
   - `Pool.kt` — `/pool` parsing and `poolRing` (the pooled 1x1's `Look`).
-    Unit-tested in `PoolTest`. Android only so far; the watch and `../ios/`
-    don't read `/pool` yet.
+    Unit-tested in `PoolTest`. `../ios/Core/Pool.swift` ports it (and
+    `Family.kt`, `SessionChart.kt`). The watch reads `/pool` only for its
+    orbit (`../wearos/wear/.../Orbit.kt`, which ports `ThreadFace.orbit`).
   - `SessionChart.kt` — pure five-hour chart logic: pooled history, recorded
     reset markers, future reset steps and label placement. Tested in
     `SessionChartTest`; older bridges fall back to pooled history and
@@ -132,8 +143,8 @@ States, shared by the ring, matrix and dash (`Mode` in `Look.kt`, highest priori
     change here should land there too.
   - `DotFont.kt` — a hand-made 5×7 dot-matrix face (Ndot-like, no font
     file). Small accents only; see Typography.
-  - `Render.kt` — the faces (`RingFace`, `MatrixFace`, `DashFace`,
-    `ThreadFace`) and `memberColor`. `ThreadFace` takes a `ThreadStrand` per
+  - `Render.kt` — the faces (`RingFace`, `DashFace`, `ThreadFace` for the
+    threads and the orbit) and `memberColor`. `Braid.kt` is the twist's pure geometry. `ThreadFace` takes a `ThreadStrand` per
     account (`strandsOf` in `Widgets.kt`), so `Sync` redraws the threads when
     any provider answers.
   - `Widgets.kt` — the five `AppWidgetProvider`s, sizing, and `Ticker`
@@ -187,21 +198,29 @@ became an accent:
 - **Labels** use Roboto medium in caps with 0.1 letter spacing, as Nothing's
   pedometer widget does.
 - **Dots** (`DotFont`) only at small sizes: the dash's "CLAUDE" header and the
-  matrix panel's labels. Don't bring them back for big numbers.
+  account numbers on the app's bars. Don't bring them back for big numbers.
 
 The emulator has no NType 82, so screenshots there show the fallback.
 
 ## Checking the design
 
 A **debug** build can draw made-up pools (`src/debug/.../Fixtures.kt`: three
-Claude accounts, one out for the session, and Codex out for the week; release
+Claude accounts, one out for the session, and three Codex ones (the first out for the week); release
 has a stub that returns null), and its manifest overlay exports the card so
 `am start` can open it:
 
+Open the emulator in T3 Code's Device panel (root `CLAUDE.md`) and launch
+through its `agent-device`:
+
 ```sh
-adb -s <device> shell am start -n com.jaikhurana.aiusagewidget/.CardActivity --ez fixture true
-adb -s <device> shell am start -n com.jaikhurana.aiusagewidget/.MainActivity --ez fixture true
+agent-device open com.jaikhurana.aiusagewidget --relaunch --launch-args --ez --launch-args fixture --launch-args true
 ```
+
+(`adb shell am start -n …/.CardActivity --ez fixture true` opens the card.)
+
+Opening the app with the fixture extra also hands it to the widgets (a
+debug-only pref, `Fixtures.setWidgets`), so every face can be judged on the
+home screen; opening the app without it turns that off again.
 
 For live numbers, pair an emulator with the real server (`10.0.2.2:8765` is
 the host, or the mDNS entry): `aiusage-server -pair` mints the code. Don't
@@ -237,7 +256,7 @@ the release APK, and attach it as `AIusageWidget-<version>.apk` with
 are shared with the tray and the watch). The APK is signed with the local debug
 key, so an update installs over the old one only from this machine's builds.
 
-Widget-picker previews for the matrix, dash and threads
+Widget-picker previews for the orbit, dash and threads
 (`res/drawable-nodpi/preview_*.png`) are crops of home-screen screenshots
 (the app no longer has a gallery). Re-take them if those faces change.
 

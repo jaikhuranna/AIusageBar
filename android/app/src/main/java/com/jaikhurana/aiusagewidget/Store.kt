@@ -135,6 +135,7 @@ class PoolStore(context: Context, val family: PoolFamily) {
  * to when they were fetched.
  */
 fun familyView(ctx: Context, family: PoolFamily, now: java.time.Instant): FamilyView {
+    if (Fixtures.widgets(ctx)) Fixtures.pool(family, now)?.let { return FamilyView.of(it, now.toEpochMilli() - 120_000, false, now) }
     val stores = family.providers.map { Store(ctx, it) }
     val snaps = stores.map { it.snapshot() }
     val ages = stores.zip(snaps).mapNotNull { (s, snap) -> snap?.cacheFetchedAt?.toEpochMilli() ?: s.fetchedAt.takeIf { it > 0 } }

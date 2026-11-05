@@ -41,6 +41,13 @@ the Android, Wear OS and iOS clients. Closing a client must never stop the serve
   `android/CLAUDE.md` → Build and install).
   Pure widget rules remain in step across Android/Wear and `ios/Core/`.
 - `docs/screenshots/` — app-only screenshots; exclude deployment URLs/addresses.
+- **Simulators and emulators run only inside T3 Code's Device panel.** Open them
+  with T3's device tools (`device_list` / `device_open`) and drive them with the
+  `agent-device` command it returns. Never start one outside T3 (`emulator -avd`,
+  `simctl boot`, `open -a Simulator`, DeviceHub): nothing may pop up on the Mac.
+  If T3 can't see a device, fix that (SDK at `~/Library/Android/sdk`, a JDK
+  under `~/Library/Java/JavaVirtualMachines`, `ffmpeg` with libx264 on PATH for
+  the emulator's video) rather than working around it.
 - `docs/architecture.svg` — the README's diagram, a hand-written SVG (light and
   dark via `prefers-color-scheme`) rather than Mermaid, which many viewers don't render.
 - `CLAUDE.local.md` — gitignored live deployment details; never publish them.

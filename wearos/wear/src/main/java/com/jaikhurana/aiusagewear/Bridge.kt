@@ -33,6 +33,24 @@ object Bridge {
         Usage.Failed(e.message ?: "network error")
     }
 
+    /** `/pool` for one family: every account's limits, for the orbit. A 404 (an older bridge) is [Usage.Failed]. */
+    fun pool(base: String, token: String, etag: String?, family: PoolFamily): Usage = try {
+        val c = open("$base/pool?family=${family.wire}", token)
+        etag?.let { c.setRequestProperty("If-None-Match", it) }
+        try {
+            when (c.responseCode) {
+                200 -> Usage.Fresh(c.inputStream.bufferedReader().use { it.readText() }, c.getHeaderField("ETag"))
+                304 -> Usage.NotModified
+                401 -> Usage.Unauthorized
+                else -> Usage.Failed("HTTP ${c.responseCode}")
+            }
+        } finally {
+            c.disconnect()
+        }
+    } catch (e: IOException) {
+        Usage.Failed(e.message ?: "network error")
+    }
+
     /** The raw events page, or null if it couldn't be fetched this time. */
     fun events(base: String, token: String, since: String?, provider: UsageProvider = UsageProvider.CLAUDE): String? = try {
         val c = open("$base/events?provider=${provider.wire}" + (since?.let { "&since=$it" } ?: ""), token)

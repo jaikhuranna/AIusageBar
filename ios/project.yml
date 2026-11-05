@@ -26,6 +26,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jaikhurana.aiusagewidget
+        # The ring face: iOS has no 1×1 Home Screen widget, so the icon is it.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: App/Info.plist
       properties:

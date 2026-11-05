@@ -47,13 +47,17 @@ abstract class UsageWidget(val style: Style, val layout: Int) : AppWidgetProvide
 /** The 1x1: the original ring, for every account of the selected provider's family pooled. */
 class RingWidget : UsageWidget(Style.POOL, R.layout.widget_glyph)
 class RingLargeWidget : UsageWidget(Style.RING, R.layout.widget_glyph)
-class MatrixWidget : UsageWidget(Style.MATRIX, R.layout.widget_card)
+/** Every account's week as threads wound into concentric rings: Claude's outside, Codex's inside. */
+class OrbitWidget : UsageWidget(Style.ORBIT, R.layout.widget_card)
 class DashWidget : UsageWidget(Style.DASH, R.layout.widget_card)
 /** Every account at once, whichever the others show. */
 class ThreadWidget : UsageWidget(Style.THREAD, R.layout.widget_card)
 
 object Widgets {
-    val ALL: List<UsageWidget> = listOf(RingWidget(), RingLargeWidget(), MatrixWidget(), DashWidget(), ThreadWidget())
+    val ALL: List<UsageWidget> = listOf(RingWidget(), RingLargeWidget(), OrbitWidget(), DashWidget(), ThreadWidget())
+
+    /** The faces that draw every account, so any provider's answer redraws them. */
+    val EVERY_ACCOUNT = setOf(Style.POOL, Style.THREAD, Style.ORBIT)
 
     /** A bitmap layer's budget; RemoteViews refuse very large parcels. */
     private const val MAX_LAYER_BYTES = 3_000_000f
@@ -80,9 +84,12 @@ object Widgets {
      * accounts (or none paired yet) still has one faint thread, so the twist
      * keeps its shape.
      */
-    fun strands(ctx: Context, now: Instant = Instant.now()): List<ThreadStrand> {
-        val paired = Store(ctx).paired
-        return strandsOf(PoolFamily.entries.map { f -> familyView(ctx, f, now).let { if (paired) it else it.copy(members = emptyList()) } }, now)
+    fun strands(ctx: Context, now: Instant = Instant.now()): List<ThreadStrand> = rings(ctx, now).flatten()
+
+    /** The same threads, one group per family: the orbit's rings, Claude's outside. */
+    fun rings(ctx: Context, now: Instant = Instant.now()): List<List<ThreadStrand>> {
+        val paired = Store(ctx).paired || Fixtures.widgets(ctx)
+        return PoolFamily.entries.map { f -> strandsOf(listOf(familyView(ctx, f, now).let { if (paired) it else it.copy(members = emptyList()) }), now) }
     }
 
     fun refreshAll(ctx: Context, only: List<UsageWidget> = ALL) {
@@ -102,6 +109,7 @@ object Widgets {
         val ring = if (w.style == Style.POOL && look.mode != Mode.UNPAIRED) pooledRing(ctx, look.now) else null
         val layers = when (w.style) {
             Style.THREAD -> Render.threads(strands(ctx, look.now), wPx, hPx)
+            Style.ORBIT -> Render.orbit(rings(ctx, look.now), wPx, hPx)
             Style.POOL -> Render.pool(ctx, ring, look, wPx, hPx)
             else -> Render.draw(ctx, w.style, look, wPx, hPx)
         }
@@ -109,7 +117,7 @@ object Widgets {
             setImageViewBitmap(R.id.ink, layers.ink)
             setImageViewBitmap(R.id.accent, layers.accent)
             setContentDescription(R.id.accent, when {
-                w.style == Style.THREAD -> describeWeeks(ctx)
+                w.style == Style.THREAD || w.style == Style.ORBIT -> describeWeeks(ctx)
                 ring != null -> describePool(ctx, ring)
                 else -> describe(look)
             })

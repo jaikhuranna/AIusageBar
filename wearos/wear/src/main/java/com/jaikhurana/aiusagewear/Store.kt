@@ -49,6 +49,16 @@ class Store(context: Context) {
 
     val paired: Boolean get() = baseUrl != null && token != null
 
+    /** Each family's last `/pool` answer, for the orbit. Kept across provider switches. */
+    fun poolJson(f: PoolFamily): String? = p.getString("pool_${f.wire}", null)
+    fun poolEtag(f: PoolFamily): String? = p.getString("pool_etag_${f.wire}", null)
+    fun poolFetchedAt(f: PoolFamily): Long = p.getLong("pool_at_${f.wire}", 0L)
+    fun setPool(f: PoolFamily, json: String?, etag: String?, at: Long) = write {
+        if (json != null) putString("pool_${f.wire}", json)
+        if (etag != null) putString("pool_etag_${f.wire}", etag) else remove("pool_etag_${f.wire}")
+        putLong("pool_at_${f.wire}", at)
+    }
+
     fun snapshot(): Snapshot? = snapshotJson?.let { runCatching { parseSnapshot(it) }.getOrNull() }
 
     fun clear() = write { clear() }

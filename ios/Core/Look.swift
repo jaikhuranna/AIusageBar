@@ -35,6 +35,8 @@ struct Look: Equatable {
     var provider: UsageProvider = .claude
     var sessionLength: TimeInterval = Look.session
     var weekLength: TimeInterval = Look.week
+    /// The subscription's email, when the bridge reports it.
+    var account: String? = nil
 
     static let session: TimeInterval = 5 * 3600
     static let week: TimeInterval = 7 * 86400
@@ -114,7 +116,8 @@ struct Look: Equatable {
         return Look(mode: mode, now: now, session: session, week: week, fetchedAt: snap?.cacheFetchedAt ?? fetchedAt, offline: lastError == .offline || snap?.sourceError != nil,
                     provider: snap?.provider ?? .claude,
                     sessionLength: snap?.fiveHour?.windowMinutes.map { Double($0) * 60 } ?? Look.session,
-                    weekLength: snap?.sevenDay?.windowMinutes.map { Double($0) * 60 } ?? Look.week)
+                    weekLength: snap?.sevenDay?.windowMinutes.map { Double($0) * 60 } ?? Look.week,
+                    account: snap?.account)
     }
 
     /// For VoiceOver.

@@ -8,3 +8,4 @@ Widgets/Widgets.entitlements
 .build/
 .swiftpm/
 xcuserdata/
+build/

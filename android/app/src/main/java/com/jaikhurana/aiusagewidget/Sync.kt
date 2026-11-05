@@ -53,7 +53,7 @@ object Sync {
                     val pool = PoolStore(ctx, family)
                     val recent = !pool.offline && now - pool.fetchedAt < MANUAL_THROTTLE_MS
                     if (force || !(manual && recent)) fetchPool(pool, bases, token, now)
-                    Widgets.refreshAll(ctx, Widgets.ALL.filter { it.style == Style.POOL || it.style == Style.THREAD })
+                    Widgets.refreshAll(ctx, Widgets.ALL.filter { it.style in Widgets.EVERY_ACCOUNT })
                 }
             }
             pools + UsageProvider.entries.map { provider ->
@@ -63,9 +63,9 @@ object Sync {
                     if (force || !(manual && recent)) fetch(store, bases, token, now)
                     store.snapshot()?.let { Plan.comeback(it, Instant.now()) }?.let { store.backAt = it.toEpochMilli() }
                     // Redraw as soon as the provider on screen has its answer. The
-                    // threads show both, so they redraw on either.
+                    // threads and the orbit show every account, so they redraw on any.
                     if (provider == store.selected) Widgets.refreshAll(ctx)
-                    else Widgets.refreshAll(ctx, Widgets.ALL.filter { it.style == Style.THREAD || it.style == Style.POOL })
+                    else Widgets.refreshAll(ctx, Widgets.ALL.filter { it.style in Widgets.EVERY_ACCOUNT })
                 }
             }.awaitAll()
         }

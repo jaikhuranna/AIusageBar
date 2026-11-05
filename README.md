@@ -1,44 +1,91 @@
 # AIusageBar
 
-A Go usage server and clients for [Claude Code](https://claude.com/claude-code) and [Codex](https://developers.openai.com/codex/) subscription usage.
+How much of your [Claude Code](https://claude.com/claude-code) and
+[Codex](https://developers.openai.com/codex/) subscription is left, at a glance,
+on every screen you own: a GNOME tray, a Wear OS watch, Android and iPhone home
+screens. Several Claude accounts pool together.
 
-`aiusage-server` collects usage, owns pairing and alerts, and serves the JSON API.
-It runs without a desktop or GTK. `aiusagebar` is the Linux GNOME tray client;
-like the [Wear OS app](wearos/), [Android widgets](android/) and [iOS widgets](ios/),
-it reads the server over HTTP. Closing any client leaves the server running.
+One Go program, `aiusage-server`, reads the usage on the desktop, owns pairing
+and alerts, and serves a small JSON API. Everything else is a client of that
+API: the Linux tray (`aiusagebar`), the [Wear OS app](wearos/), the
+[Android app and widgets](android/) and the [iPhone app and widgets](ios/).
+Closing any client leaves the server running.
 
 <p align="center"><img src="docs/architecture.svg" width="760" alt="Local provider CLIs and usage caches feed the Go usage server, which serves the Linux tray, Android, Wear OS and iOS clients"></p>
 
-| Wear OS: session | Wear OS: week |
-| :---: | :---: |
-| <img src="docs/screenshots/watch-session.png" width="260" alt="Watch: 55% left this session, resets in 4h 14m"> | <img src="docs/screenshots/watch-weekly.png" width="260" alt="Watch: 15% left this week, resets in 1d 8h"> |
+## The orbit
 
-| Android widget | Out of session: countdown to the reset | Tap card: both families, 5h graph, weekly threads |
+Every client draws your accounts the same way: each account's week is a
+thread, bright for what's left and faint where it's been used, with a bead
+where it runs out. Claude's accounts twist round the outer ring (orange, tan
+and further shades), Codex's round the inner one (greens).
+
+| Wear OS: the orbit tile | Tap a ring: Claude | Tap a ring: Codex |
 | :---: | :---: | :---: |
-| <img src="docs/screenshots/widget-session.png" width="260" alt="Widget: 10% of the session left, 38% of the week, with pace estimates"> | <img src="docs/screenshots/widget-out.png" width="260" alt="Widget: session out, 2:51 until the 5h reset"> | <img src="docs/screenshots/widget-card.png" width="260" alt="Tap card: Claude across two accounts at 50% of the session and 57% of the week, Codex at 89% and 51%, a 12-hour graph of the pooled session with reset steps, and every account's week as twisted threads"> |
+| <img src="docs/screenshots/watch-orbit.png" width="240" alt="Watch tile: two Claude accounts twisted round the outer ring, one about two thirds through its week and one spent; the Codex ring inside"> | <img src="docs/screenshots/watch-claude.png" width="240" alt="Watch: the Claude ring softened, with 5H 71% and WEEK 32% circling it and the Claude mark in the middle"> | <img src="docs/screenshots/watch-codex.png" width="240" alt="Watch: the Codex ring softened, its figures circling it and the Codex mark in the middle"> |
 
-- Tray icon = two small meters (green/orange/red, grey when stale) for the
-  label's two numbers. Tray text = one provider's windows (`C1 5h 42% · 7d 61%`)
-  or, with two Claude accounts, each account's tighter limit (`Claude 42 · 17%`).
-- Click menu shows:
-  - **Session (5h)** and **Week (7d)** limit utilization and when each resets,
-    for every provider the server serves (Claude, Claude 2, Codex)
-    - read straight from Anthropic's own cached usage data in `~/.claude.json`
-      (the same numbers Claude Code itself shows you), so the percentages and
-      reset times are exact, not estimated.
-  - **API-cost equivalent** for today / this session / this week - what the
-    same token usage would have cost on pay-as-you-go API pricing, computed
-    from the token counts logged in `~/.claude/projects/**/*.jsonl` using
-    current per-model Anthropic pricing (updated 2026-09). Each reply is
-    counted once: Claude Code writes a transcript line per content block, all
-    repeating the reply's usage, so lines are deduplicated by message id +
-    request id. Cache reads use each model's own rate (Opus 5.5 and Fable 5.1
-    aren't the usual 0.1x), and 1-hour cache writes are 2x input. T3 Code
-    prices every cache write at the 5-minute 1.25x rate, so it shows a little
-    less for the same usage.
-- Refreshes every 30s, or on demand via the "Refresh" menu item.
-- The independent server serves these numbers to every client over the same API.
-  The tray shows connection/source freshness and retains visibly stale values when offline.
+On the watch the orbit is a tile and the app's first page. Tap a ring and it
+blurs slightly, the family's session and week left circle over it, slowly
+turning, and its mark sits in the middle; tap again to put it back. The blur
+and lettering are drawn once per data change and cached, so a tap costs
+nothing but a redraw.
+
+| Android: orbit | Android: threads | Android app |
+| :---: | :---: | :---: |
+| <img src="docs/screenshots/android-orbit.png" width="220" alt="Android 2x2 orbit widget: three Claude and three Codex accounts as threads in two rings"> | <img src="docs/screenshots/android-threads.png" width="300" alt="Android 4x1 threads widget: every account's week twisted into one rope"> | <img src="docs/screenshots/android-app.png" width="220" alt="Android app: Claude's Session (42% left, +33% in 41m) and Weekly (56% left) cards with a bar segment and a row per account"> |
+
+| Android: dash | Session out | Tap card |
+| :---: | :---: | :---: |
+| <img src="docs/screenshots/widget-session.png" width="240" alt="Dash widget: 10% of the session left, 38% of the week, with pace estimates"> | <img src="docs/screenshots/widget-out.png" width="240" alt="Dash widget: session out, 2:51 until the 5h reset"> | <img src="docs/screenshots/widget-card.png" width="240" alt="Tap card: Claude across two accounts and Codex, a 12-hour graph of the pooled session with reset steps, and every account's week as twisted threads"> |
+
+| iPhone: orbit and threads | iPhone app | App icon (the ring) |
+| :---: | :---: | :---: |
+| <img src="docs/screenshots/ios-widgets.png" width="260" alt="iPhone Home Screen: the orbit widget, and the threads widget with 5H LEFT 42%, BURN 1.6%/H and USABLE NOW 39%"> | <img src="docs/screenshots/ios-app.png" width="220" alt="iPhone app: Claude's Session and Weekly cards with a row per account"> | <img src="docs/screenshots/ios-icon.png" width="110" alt="The app icon: the ring face, session as the ring and the week as the pie"> |
+
+Screenshots of the phones use made-up accounts (the debug fixture); the
+watch's are live.
+
+## What each client shows
+
+- **Wear OS** (`wearos/`): the orbit as a tile and as the app, with the
+  tap-a-ring figures; a Setup page (provider, pairing, the API-cost estimate);
+  two complications (% left and time to the reset that matters) and the
+  server's alerts, including "Claude's back" when a spent limit resets.
+- **Android** (`android/`): five widgets in Nothing OS's style: the pooled
+  1x1 ring, the 2x2 ring, the 2x2 orbit, the 4x2 dash and the 4x1 threads.
+  The app shows each family's Session and Weekly cards (the share of the whole
+  family left, what the next reset brings back, pace, a bar split per account,
+  a row per account). Tapping a widget opens a compact card: both families'
+  limits, a five-hour history graph of the pooled session with upcoming reset
+  steps, and every account's week as threads.
+- **iPhone** (`ios/`): the same app and tap card, and Android's widgets where
+  iOS has a size for them: the orbit (small), the dash (medium), the threads
+  (medium, with the selected family's session left, burn rate and what's
+  usable now under them; also on the Lock Screen) and the pooled ring (Lock
+  Screen). iOS has no 1x1 Home Screen widget, so the ring is the app's icon.
+- **Linux tray** (`aiusagebar`):
+  - Tray icon = two small meters (green/orange/red, grey when stale) for the
+    label's two numbers. Tray text = one provider's windows (`C1 5h 42% · 7d 61%`)
+    or, with two Claude accounts, each account's tighter limit (`Claude 42 · 17%`).
+  - Click menu shows:
+    - **Session (5h)** and **Week (7d)** limit utilization and when each resets,
+      for every provider the server serves (Claude, Claude 2, Codex)
+      - read straight from Anthropic's own cached usage data in `~/.claude.json`
+        (the same numbers Claude Code itself shows you), so the percentages and
+        reset times are exact, not estimated.
+    - **API-cost equivalent** for today / this session / this week - what the
+      same token usage would have cost on pay-as-you-go API pricing, computed
+      from the token counts logged in `~/.claude/projects/**/*.jsonl` using
+      current per-model Anthropic pricing (updated 2026-09). Each reply is
+      counted once: Claude Code writes a transcript line per content block, all
+      repeating the reply's usage, so lines are deduplicated by message id +
+      request id. Cache reads use each model's own rate (Opus 5.5 and Fable 5.1
+      aren't the usual 0.1x), and 1-hour cache writes are 2x input. T3 Code
+      prices every cache write at the 5-minute 1.25x rate, so it shows a little
+      less for the same usage.
+  - Refreshes every 30s, or on demand via the "Refresh" menu item.
+  - The independent server serves these numbers to every client over the same API.
+    The tray shows connection/source freshness and retains visibly stale values when offline.
 
 Subscription plans (Pro/Max) don't expose a dollar limit or a metered
 balance - only a percentage of your session/weekly allowance. The cost
@@ -64,27 +111,18 @@ sudo apt install build-essential libgtk-3-dev libayatana-appindicator3-dev
 ```
 
 The watch and phone apps are separate Gradle builds (Android SDK, JDK 17+),
-installed by sideloading. Both pair with the bridge (see **Pairing a device**):
+installed by sideloading. Both pair with the server (see **Pairing a device**):
 
 ```sh
 cd wearos  && ./gradlew :wear:assembleRelease   # wear/build/outputs/apk/release/
 cd android && ./gradlew :app:assembleRelease    # app/build/outputs/apk/release/
 ```
 
-The phone app has five widgets (a 1x1 and a 2x2 ring, a 2x2 dot matrix, a
-4x2 dashboard, and a 4x1 of weekly limits as one twisted thread per account)
-in Nothing OS's style. The 1x1 pools every account of the selected family
-(see **Pooled limits**); the app itself shows each family's session and weekly
-limits with a row per account. Tapping one opens a compact card with both families'
-limits, a five-hour history graph with a remembered Claude/Codex toggle,
-weekly threads and a refresh. The graph uses a coloured line and gradient
-fill for recorded history, a NOW marker and dashed steps at upcoming resets.
-Those future steps assume no more spending; account-coloured markers show
-reset times and gains where space allows. The graph and threads have no
-animation or glow.
-
-Or skip the build: the phone app's APK is attached to each `widget-v*` release
-on the [Releases](https://github.com/jaikhuranna/AIusageBar/releases) page.
+Or skip the build: each `widget-v*` release on the
+[Releases](https://github.com/jaikhuranna/AIusageBar/releases) page has the
+phone APK, and from 0.12.0 the watch APK too. Both are signed with a local
+debug key, so a release built on a different machine than the one you
+installed from won't install over it: uninstall first (and pair again).
 
 The iPhone app is an Xcode project generated with
 [XcodeGen](https://github.com/yonaskolb/XcodeGen), built on a Mac (Xcode 26+,
@@ -94,12 +132,11 @@ iOS 17+) and installed from Xcode with your own signing team:
 cd ios && xcodegen && open AIusageWidget.xcodeproj
 ```
 
-It has the same faces: the ring (Home Screen and Lock Screen), the matrix and
-the dash. Tapping one opens the app's card and refreshes. The app cards and
-gallery use Liquid Glass on iOS 26+, with material backgrounds on iOS 17–18.
-Choose the Home Screen's **Clear** appearance for WidgetKit's Liquid Glass
-widget background; tinted and Lock Screen appearances are also supported.
-Select Claude, Claude 2 or Codex in the app; all its widgets follow that selection.
+On the Home Screen, choose the **Clear** appearance for WidgetKit's Liquid
+Glass widget background; tinted and Lock Screen appearances work too. Pick
+Claude, Claude 2 or Codex under the app's "•••": the dash follows it, the
+pool and the threads' figures pool that pick's family, and the orbit and the
+threads always show every account.
 
 ## Run the server and tray
 
@@ -177,10 +214,11 @@ not supply subscription quota windows through this method.
 
 The desktop menu switches between Claude and Codex. On Android, the widget's tap
 card and the app show both side by side; pick which one the widgets draw with
-its "Show on widgets" button. On iOS, select the provider
-in the app. Each phone's ring, matrix and dash widgets follow that selection. On
-the watch, choose the provider on the Setup page; its tile, complications and
-notifications follow that selection. Pairing works for both providers with
+its "Show on widgets" button. On iOS, the app and the card show
+both too; pick the widgets' provider under the app's "•••". Each phone's ring and
+dash widgets follow that selection. On
+the watch, choose the provider on the Setup page; its complications and
+notifications follow that selection, while the orbit always shows every account. Pairing works for both providers with
 the same device token.
 
 Codex is sampled at most once a minute, including requests from multiple

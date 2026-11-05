@@ -5,6 +5,8 @@ import java.time.Instant
 
 enum class UsageProvider(val wire: String, val title: String) {
     CLAUDE("claude", "Claude"), CLAUDE2("claude2", "Claude 2"), CODEX("codex", "Codex");
+
+    val family: PoolFamily get() = if (this == CODEX) PoolFamily.CODEX else PoolFamily.CLAUDE
     companion object {
         fun fromWire(value: String) = entries.firstOrNull { it.wire == value } ?: CLAUDE
     }

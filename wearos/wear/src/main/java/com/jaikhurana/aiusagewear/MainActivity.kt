@@ -73,10 +73,25 @@ import kotlinx.coroutines.launch
 import java.time.Instant
 
 class MainActivity : ComponentActivity() {
+    /** The orbit ring a tile tap picked, shown with its figures. */
+    private val picked = mutableStateOf<Int?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Alerts.ensureChannels(this)
-        setContent { MaterialTheme { App() } }
+        picked.value = ringOf(intent)
+        setContent { MaterialTheme { App(picked) } }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        ringOf(intent)?.let { picked.value = it }
+    }
+
+    private fun ringOf(i: android.content.Intent?) = i?.getIntExtra(EXTRA_RING, -1)?.takeIf { it >= 0 }
+
+    companion object {
+        const val EXTRA_RING = "ring"
     }
 
     override fun onResume() {
@@ -86,29 +101,28 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val ORANGE = Color(0xFFFF8A1F)
-private val ORANGE_DEEP = Color(0xFF8A3A00)
-private val TRACK = Color(0x40FF8A1F)
 private val SOFT = Color(0xFFFFD3AE)
-private val DIM = Color(0xFFB9987E)
+internal val DIM = Color(0xFFB9987E)
 
 @Composable
-private fun App() {
+private fun App(picked: androidx.compose.runtime.MutableState<Int?>) {
     val version by Store.changes.collectAsState()
     val store = Store(LocalContext.current)
     // Re-read on every write; the store is small and in memory.
     @Suppress("UNUSED_EXPRESSION") version
-    if (!store.paired) PairingScreen() else Paired(store)
+    if (!store.paired) PairingScreen() else Paired(store, picked)
 }
 
-/** Swipe left or turn the bezel: Session → Weekly → Setup. */
+/** Swipe left or turn the bezel: Orbit → Setup. */
 @Composable
-private fun Paired(store: Store) {
+private fun Paired(store: Store, picked: androidx.compose.runtime.MutableState<Int?>) {
     val notify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= 33) notify.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
-    val pager = rememberPagerState { 3 }
+    val pager = rememberPagerState { PAGES }
+    // A tile tap on a ring: show the orbit with that ring's figures.
+    LaunchedEffect(picked.value) { if (picked.value != null) pager.scrollToPage(0) }
     val setupList = rememberScalingLazyListState()
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
@@ -120,11 +134,11 @@ private fun Paired(store: Store) {
             // list scrolls first, and turning back past its top leaves it.
             .onRotaryScrollEvent { e ->
                 val d = e.verticalScrollPixels
-                val onSetup = pager.currentPage == 2 && !pager.isScrollInProgress
+                val onSetup = pager.currentPage == PAGES - 1 && !pager.isScrollInProgress
                 if (onSetup && (if (d > 0) setupList.canScrollForward else setupList.canScrollBackward)) {
                     scope.launch { setupList.scrollBy(d) }
                 } else if (!pager.isScrollInProgress && kotlin.math.abs(d) >= 1f) {
-                    val to = (pager.currentPage + if (d > 0) 1 else -1).coerceIn(0, 2)
+                    val to = (pager.currentPage + if (d > 0) 1 else -1).coerceIn(0, PAGES - 1)
                     if (to != pager.currentPage) scope.launch { pager.animateScrollToPage(to) }
                 }
                 true
@@ -134,8 +148,7 @@ private fun Paired(store: Store) {
     ) {
         HorizontalPager(state = pager) { page ->
             when (page) {
-                0 -> LimitPage(store, "five_hour")
-                1 -> LimitPage(store, "seven_day")
+                0 -> OrbitPage(store, picked.value) { picked.value = it }
                 else -> SetupPage(store, setupList)
             }
         }
@@ -149,148 +162,12 @@ private fun Paired(store: Store) {
             }
         }
         val dotsAlpha by animateFloatAsState(if (dotsShown) 1f else 0f, tween(durationMillis = 400), label = "dots")
-        PageDots(current = pager.currentPage, count = 3, alpha = dotsAlpha)
-    }
-}
-
-/** One limit, Samsung Health style: glow from below, a ring open at the bottom, one big number. */
-@Composable
-private fun LimitPage(store: Store, key: String) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var now by remember { mutableStateOf(Instant.now()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(30_000)
-            now = Instant.now()
-        }
-    }
-    var refreshing by remember { mutableStateOf(false) }
-    val snap = store.snapshot()
-    val window = if (key == "seven_day") snap?.sevenDay else snap?.fiveHour
-    val e = window?.effective(now)
-    val comeback = snap?.let { Plan.comeback(it, now) }
-    val name = windowLabel(key, snap)
-
-    val word = "$name · ${store.provider.title}"
-    // One big number, one line saying what it is, and at most one more line.
-    val (big, what, detail) = when {
-        store.lastError == Store.ERROR_UNPAIRED -> Triple("—", "This watch was unpaired", null)
-        snap == null -> Triple("…", if (store.lastError == Store.ERROR_OFFLINE) "Can't reach the desktop" else "Waiting for the desktop", null)
-        e == null -> Triple("—", "$name not reported", null)
-        e.unconfirmedReset -> Triple("100%", "left $word", "reset · unconfirmed")
-        e.remaining <= 0 && comeback != null -> Triple(untilText(now, comeback), "until ${store.provider.title}'s back", "at ${clockText(ctx, comeback, now)}")
-        e.remaining <= 0 -> Triple("0%", "left $word", null)
-        else -> Triple("${e.remaining}%", "left $word", e.resetsAt?.let { "resets in ${untilText(now, it)}" })
-    }
-    // Only when it matters: fresh data needs no timestamp.
-    val sourceAt = snap?.cacheFetchedAt?.toEpochMilli() ?: store.fetchedAt
-    val stale = sourceAt > 0 && now.toEpochMilli() - sourceAt > 15 * 60_000
-    val status = when {
-        refreshing -> null // the spinning ↻ already says so
-        snap?.sourceError != null -> "source unavailable · ${agoText(sourceAt, now)}"
-        store.lastError == Store.ERROR_OFFLINE -> "desktop offline · ${agoText(sourceAt, now)}"
-        stale -> "updated ${agoText(sourceAt, now)}"
-        else -> null
-    }
-
-    Box(Modifier.fillMaxSize()) {
-        Canvas(Modifier.fillMaxSize()) {
-            // Orange glow rising from the bottom edge.
-            drawRect(Color.Black)
-            drawRect(
-                Brush.radialGradient(
-                    colors = listOf(ORANGE_DEEP, ORANGE_DEEP.copy(alpha = 0.35f), Color.Transparent),
-                    center = Offset(size.width / 2, size.height * 1.08f),
-                    radius = size.height * 0.95f,
-                ),
-            )
-            ring(e?.remaining)
-        }
-        Column(
-            Modifier.fillMaxSize().padding(horizontal = 34.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Spacer(Modifier.height(32.dp))
-            Text(big, color = Color.White, fontSize = if (big.length > 5) 26.sp else 36.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-            Text(what, color = SOFT, fontSize = 14.sp, textAlign = TextAlign.Center, maxLines = 2)
-            detail?.let { Text(it, color = DIM, fontSize = 12.sp, maxLines = 1) }
-            status?.let { Text(it, color = DIM, fontSize = 11.sp, maxLines = 1) }
-            Spacer(Modifier.height(32.dp)) // sits the text a little below centre, clear of the button
-        }
-        // Low, in the ring's open gap at the bottom.
-        Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) {
-            if (store.lastError == Store.ERROR_UNPAIRED) {
-                PairAgain { unpair(ctx, store) }
-            } else {
-                RefreshButton(spinning = refreshing) {
-                    refreshing = true
-                    scope.launch {
-                        Sync.run(ctx, manual = true, force = true)
-                        refreshing = false
-                        now = Instant.now()
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * A small round ↻, clear of the ring. The touch area is larger than the dot;
- * the ripple is the dot's size and round.
- */
-@Composable
-private fun RefreshButton(spinning: Boolean, onClick: () -> Unit) {
-    val spin = rememberInfiniteTransition(label = "spin")
-        .animateFloat(0f, 360f, infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Restart), label = "angle")
-    Box(
-        Modifier
-            .size(40.dp)
-            .clickable(
-                interactionSource = null,
-                indication = ripple(bounded = false, radius = 15.dp),
-                enabled = !spinning,
-                onClick = onClick,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(Modifier.size(30.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)))
-        // Drawn rather than a ↻ glyph: a glyph's box isn't centred on its ink,
-        // so it wobbled when spun. This circle's centre is the Canvas's centre.
-        Canvas(Modifier.size(14.dp).graphicsLayer { rotationZ = if (spinning) spin.value else 0f }) {
-            val w = 1.6.dp.toPx()
-            val head = 3.dp.toPx()
-            val r = size.minDimension / 2 - head / 2
-            val c = center
-            val start = -30f
-            val sweep = 280f
-            drawArc(
-                Color.White, start, sweep, useCenter = false,
-                topLeft = Offset(c.x - r, c.y - r), size = Size(2 * r, 2 * r),
-                style = Stroke(w, cap = StrokeCap.Round),
-            )
-            // Arrowhead at the arc's end, pointing clockwise.
-            val a = Math.toRadians((start + sweep).toDouble())
-            val rx = kotlin.math.cos(a).toFloat()
-            val ry = kotlin.math.sin(a).toFloat()
-            val end = Offset(c.x + r * rx, c.y + r * ry)
-            drawPath(
-                Path().apply {
-                    moveTo(end.x - ry * head * 1.2f, end.y + rx * head * 1.2f)
-                    lineTo(end.x + rx * head, end.y + ry * head)
-                    lineTo(end.x - rx * head, end.y - ry * head)
-                    close()
-                },
-                Color.White,
-            )
-        }
+        PageDots(current = pager.currentPage, count = PAGES, alpha = dotsAlpha)
     }
 }
 
 @Composable
-private fun PairAgain(onClick: () -> Unit) {
+internal fun PairAgain(onClick: () -> Unit) {
     Box(
         Modifier
             .height(30.dp)
@@ -304,27 +181,10 @@ private fun PairAgain(onClick: () -> Unit) {
     }
 }
 
-/**
- * A thick ring open at the bottom (270°, from about 7:30 round to 4:30), filled
- * clockwise from the bottom-left with what's left.
- */
-private fun DrawScope.ring(remaining: Int?) {
-    val stroke = 15.dp.toPx()
-    val inset = 5.dp.toPx() + stroke / 2
-    val topLeft = Offset(inset, inset)
-    val arcSize = Size(size.width - 2 * inset, size.height - 2 * inset)
-    val style = Stroke(width = stroke, cap = StrokeCap.Round)
-    drawArc(TRACK, RING_START, RING_SPAN, useCenter = false, topLeft = topLeft, size = arcSize, style = style)
-    val left = (remaining ?: 0).coerceIn(0, 100)
-    if (left > 0) {
-        drawArc(ORANGE, RING_START, RING_SPAN * left / 100f, useCenter = false, topLeft = topLeft, size = arcSize, style = style)
-    }
-}
+private const val PAGES = 2
 
-private const val RING_START = 135f // 0° is 3 o'clock, clockwise
-private const val RING_SPAN = 270f
 
-/** Which of the three pages you're on, in the ring's gap at the bottom. */
+/** Which page you're on, in the ring's gap at the bottom. */
 @Composable
 private fun PageDots(current: Int, count: Int, alpha: Float) {
     if (alpha <= 0f) return
@@ -384,7 +244,7 @@ private fun SetupPage(store: Store, list: ScalingLazyListState) {
     }
 }
 
-private fun unpair(ctx: android.content.Context, store: Store) {
+internal fun unpair(ctx: android.content.Context, store: Store) {
     Scheduler.cancel(ctx)
     Alerts.clearComeback(ctx)
     store.clear()

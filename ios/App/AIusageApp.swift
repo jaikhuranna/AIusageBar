@@ -9,8 +9,12 @@ struct AIusageApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(model)
-                // A widget tap: the card is what's on screen, so just refresh it.
-                .onOpenURL { _ in Task { await model.refresh(.force) } }
+                // A widget tap opens the card over the app and refreshes it, like
+                // Android's tap card; unpaired, it opens pairing.
+                .onOpenURL { url in
+                    if url.host == "card", model.store.paired { model.showCard = true }
+                    Task { await model.refresh(.force) }
+                }
         }
     }
 }
@@ -21,10 +25,15 @@ struct AIusageApp: App {
 final class AppModel: ObservableObject {
     let store = Store.shared
     @Published private(set) var busy = false
+    /// The widget tap card, shown as a sheet over the app.
+    @Published var showCard = Fixtures.enabled && ProcessInfo.processInfo.arguments.contains("-card")
     /// Bumped on every change, so views re-read `store`.
     @Published private(set) var version = 0
 
     func look(at now: Date) -> Look { store.look(now: now) }
+
+    /// Claude then Codex, as the app and the card draw them.
+    func views(at now: Date) -> [FamilyView] { PoolFamily.allCases.map { store.familyView($0, now: now) } }
 
     func refresh(_ reason: Sync.Reason) async {
         if busy { return }
@@ -46,11 +55,15 @@ final class AppModel: ObservableObject {
         await refresh(.force)
     }
 
+    /// Every cache is warm, so this is only a redraw: never gated on a refresh.
     func selectProvider(_ provider: UsageProvider) async {
-        guard !busy, provider != store.provider else { return }
-        busy = true
+        guard provider != store.selected else { return }
         await Sync.shared.selectProvider(provider)
-        busy = false
+        changed()
+    }
+
+    func pickChart(_ family: PoolFamily) {
+        store.chartFamily = family
         changed()
     }
 

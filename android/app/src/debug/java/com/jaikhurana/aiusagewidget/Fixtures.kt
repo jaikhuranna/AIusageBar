@@ -1,17 +1,31 @@
 package com.jaikhurana.aiusagewidget
 
+import android.content.Context
 import java.time.Duration
 import java.time.Instant
 
 /**
  * Debug builds only (release has a stub): made-up pools that follow the
  * `/pool` contract, for judging the card and the app without live accounts.
- * Three Claude accounts (one out for the session) and Codex out for the week:
+ * Three Claude accounts (one out for the session) and three Codex ones (the first out for the week):
  *
  *     adb shell am start -n com.jaikhurana.aiusagewidget/.CardActivity --ez fixture true
  *     adb shell am start -n com.jaikhurana.aiusagewidget/.MainActivity --ez fixture true
  */
 object Fixtures {
+    private const val KEY = "debug_fixture"
+
+    /** Whether the widgets draw the fixture too: set by opening the app with the fixture extra. */
+    fun widgets(ctx: Context): Boolean =
+        ctx.applicationContext.getSharedPreferences("aiusage", Context.MODE_PRIVATE).getBoolean(KEY, false)
+
+    /** Opening the app turns it on with the extra and off without; true when that changed it. */
+    fun setWidgets(ctx: Context, on: Boolean): Boolean {
+        if (widgets(ctx) == on) return false
+        ctx.applicationContext.getSharedPreferences("aiusage", Context.MODE_PRIVATE).edit().putBoolean(KEY, on).apply()
+        return true
+    }
+
     /** [ended] is how much each earlier five-hour window had left when it reset, newest first. */
     private class Account(val email: String?, val session: Int, val week: Int, val sessionIn: Long, val weekIn: Long, val ended: List<Int> = emptyList())
 
@@ -22,14 +36,20 @@ object Fixtures {
             Account("second@example.com", 82, 71, 290, 129 * 60, listOf(30, 0, 65)),
             Account("third@example.com", 0, 38, 41, 20 * 60, listOf(0, 22)),
         )
-        PoolFamily.CODEX -> build(family, now, Account(null, 100, 0, 300, 76 * 60, listOf(0, 18)))
+        // Three subscriptions, so the orbit's inner ring has a twist to show.
+        PoolFamily.CODEX -> build(
+            family, now,
+            Account(null, 100, 0, 300, 76 * 60, listOf(0, 18)),
+            Account("codex-team@example.com", 64, 52, 175, 98 * 60, listOf(40, 70)),
+            Account("codex-side@example.com", 90, 81, 250, 140 * 60, listOf(85)),
+        )
     }
 
     private fun build(family: PoolFamily, now: Instant, vararg accounts: Account): Pool {
         fun at(min: Long) = now.plus(Duration.ofMinutes(min))
         val members = accounts.mapIndexed { i, a ->
             PoolMember(
-                provider = if (family == PoolFamily.CODEX) "codex" else if (i == 0) "claude" else "claude${i + 1}",
+                provider = if (i == 0) family.wire else "${family.wire}${i + 1}",
                 account = a.email,
                 fiveHour = LimitWindow(100 - a.session, a.session, at(a.sessionIn), 300),
                 sevenDay = LimitWindow(100 - a.week, a.week, at(a.weekIn), 10080),

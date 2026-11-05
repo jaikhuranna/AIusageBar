@@ -75,6 +75,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         // Debug builds only: made-up pools, to judge the design without live accounts.
         val fixture = intent.getBooleanExtra(CardActivity.EXTRA_FIXTURE, false)
+        // Debug builds pass the fixture on to the widgets, so every face can be judged too.
+        if (Fixtures.setWidgets(this, fixture)) Widgets.refreshAll(this)
         setContent { App(fixture) }
     }
 
@@ -307,7 +309,7 @@ private fun Divider(fg: Color) = Box(Modifier.fillMaxWidth().height(1.dp).backgr
 private val WIDGETS = listOf(
     "1×1 ring · every account pooled" to RingWidget::class.java,
     "2×2 ring" to RingLargeWidget::class.java,
-    "2×2 dot matrix" to MatrixWidget::class.java,
+    "2×2 orbit · every account's week" to OrbitWidget::class.java,
     "4×2 dash" to DashWidget::class.java,
     "4×1 threads" to ThreadWidget::class.java,
 )

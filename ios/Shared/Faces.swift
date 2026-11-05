@@ -2,17 +2,42 @@ import SwiftUI
 import UIKit
 import WidgetKit
 
-/// The three faces, ported from the Android widgets' `Render.kt`. The shapes,
-/// proportions and states are the same; only the drawing API differs.
-enum Style { case ring, matrix, dash }
+/// The faces, ported from the Android widgets' `Render.kt`. The shapes,
+/// proportions and states are the same; only the drawing API differs. The
+/// threads draw many accounts at once, so they are `ThreadsView`, not a style.
+enum Style { case ring, dash }
 
 enum Palette {
     static func accent(_ provider: UsageProvider) -> Color {
-        provider == .codex ? Color(red: 16 / 255, green: 163 / 255, blue: 127 / 255) : orange
+        switch provider {
+        case .claude: return orange
+        case .claude2: return claude2
+        case .codex: return green
+        }
     }
-    static let orange = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
+    static let orange = hex(0xD97757)
+    /// Claude 2: a tan sibling of Claude's orange, so both read as Claude. Less
+    /// red than the orange, well short of the timer yellow.
+    static let claude2 = hex(0xBF8B5A)
+    static let green = hex(0x10A37F)
+    /// Account `index` of a family: the first in the family's own colour, the
+    /// second in its sibling (Claude 2's tan), and more in further shades, so
+    /// every thread and segment of a family reads as that family.
+    static func member(_ family: PoolFamily, _ index: Int) -> Color {
+        let shades = family == .claude ? [orange, claude2, hex(0xE9A07E), hex(0x9E5A3C)] : [green, hex(0x6CC9A9), hex(0x0B7559)]
+        return shades[max(index, 0) % shades.count]
+    }
+    static func hex(_ v: Int) -> Color {
+        Color(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255)
+    }
     static let yellow = Color(red: 1, green: 0xC5 / 255, blue: 0x3D / 255)
     static let grey = Color(red: 0x8C / 255, green: 0x8C / 255, blue: 0x8C / 255)
+    /// The app's page behind the cards: system_neutral1_100 in light mode, black in dark.
+    static let page = Color(UIColor { t in
+        t.userInterfaceStyle == .dark
+            ? UIColor.black
+            : UIColor(red: 0xE4 / 255, green: 0xE2 / 255, blue: 0xE6 / 255, alpha: 1)
+    })
     /// Nothing's widget background: system_neutral1_50 in light mode, system_neutral1_900 in dark.
     static let background = Color(UIColor { t in
         t.userInterfaceStyle == .dark
@@ -221,7 +246,6 @@ enum Faces {
         guard size.width >= 1, size.height >= 1 else { return Layers() }
         switch style {
         case .ring: return ring(look, size)
-        case .matrix: return matrix(look, size)
         case .dash: return dash(look, size)
         }
     }
@@ -280,119 +304,6 @@ enum Faces {
         return l
     }
 
-    /// An LED panel: the session's headroom set in type in a window cut out of
-    /// the dots, small dot labels, the week as a bar of dots along the bottom.
-    private static func matrix(_ look: Look, _ size: CGSize) -> Layers {
-        enum Cell { case off, ink, orange, yellow, grey, blank }
-        var l = Layers()
-
-        // Inset, so the panel sits inside the widget's rounded corners.
-        let inset = min(size.width, size.height) * 0.08
-        let aw = size.width - 2 * inset
-        let ah = size.height - 2 * inset
-        let pitch = min(aw / 38, ah / 26)
-        let cols = Int(aw / pitch)
-        let rows = Int(ah / pitch)
-        let ox = (size.width - CGFloat(cols) * pitch) / 2
-        let oy = (size.height - CGFloat(rows) * pitch) / 2
-        var grid = Array(repeating: Array(repeating: Cell.off, count: cols), count: rows)
-        func centre(_ r: Int, _ c: Int) -> CGPoint {
-            CGPoint(x: ox + (CGFloat(c) + 0.5) * pitch, y: oy + (CGFloat(r) + 0.5) * pitch)
-        }
-
-        func put(_ text: String, _ col: Int, _ row: Int, _ v: Cell) {
-            DotFont.forEachDot(text) { c, r in
-                if (0..<rows).contains(row + r), (0..<cols).contains(col + c) { grid[row + r][col + c] = v }
-            }
-        }
-        func putRight(_ text: String, _ right: Int, _ row: Int, _ v: Cell) { put(text, right - DotFont.width(text) + 1, row, v) }
-        func putCentered(_ text: String, _ row: Int, _ v: Cell) { put(text, (cols - DotFont.width(text)) / 2, row, v) }
-
-        // Top labels, a big middle, a labelled bar: 7 + gap + 14 + gap + 7 rows.
-        let gap = min(max((rows - 2 - 28) / 2, 0), 4)
-        let top = max((rows - (28 + 2 * gap)) / 2, 0)
-        let mid = top + 7 + gap
-        let bottom = mid + 14 + gap
-        func bar(_ label: String, _ labelV: Cell, _ percent: Int, _ v: Cell) {
-            put(label, 1, bottom, labelV)
-            let x0 = 1 + DotFont.width(label) + 2
-            let x1 = cols - 2
-            guard x0 <= x1 else { return }
-            let lit = Int((Double(x1 - x0 + 1) * Double(percent) / 100).rounded())
-            for c in x0...x1 {
-                for r in (bottom + 2)...(bottom + 4) where (0..<rows).contains(r) { grid[r][c] = c - x0 < lit ? v : .off }
-            }
-        }
-
-        // The big middle is set in type, not dots: see `Fonts`.
-        var big: (text: String, cell: Cell)?
-        var slashed = false
-        switch look.mode {
-        case .unpaired:
-            big = ("PAIR", .ink)
-        case .waiting:
-            big = ("…", .ink)
-        case .normal:
-            put(look.sessionLabel, 1, top, .ink)
-            putRight(shortCountdown(from: look.now, to: look.session?.resetsAt), cols - 2, top, .ink)
-            big = (look.session == nil ? "--" : String(look.sessionLeft), .orange)
-            bar(look.weekLabel, .ink, look.weekLeft, .orange)
-        case .sessionOut:
-            put(look.sessionLabel, 1, top, .yellow)
-            putRight("OUT", cols - 2, top, .yellow)
-            big = (countdown(look) ?? "OUT", .yellow)
-            bar(look.weekLabel, .ink, look.weekLeft, .orange)
-        case .weekOut:
-            put(look.weekLabel, 1, top, .grey)
-            putRight("OUT", cols - 2, top, .grey)
-            big = (countdown(look) ?? "--", .grey)
-            bar(look.sessionLabel, .grey, 0, .grey)
-            slashed = true
-        case .go:
-            putCentered(look.provider.title.uppercased(), top, .ink)
-            big = ("GO!", .orange)
-            bar(look.weekLabel, .ink, look.weekLeft, .orange)
-        }
-
-        let colors: [Cell: Color] = [.orange: Palette.accent(look.provider), .yellow: Palette.yellow, .grey: Palette.grey]
-        if let big {
-            let box = CGRect(x: ox + 1.5 * pitch, y: oy + CGFloat(mid + 1) * pitch, width: CGFloat(cols - 3) * pitch, height: 12 * pitch)
-            let t = Placed.fit(big.text, in: box)
-            if big.cell == .ink { l.ink.text(t, fg()) } else { l.accent.text(t, colors[big.cell]!) }
-            // Switch off the dots under the type, one cell of margin around it.
-            let ink = t.capBounds.insetBy(dx: -pitch, dy: -pitch)
-            for r in 0..<rows {
-                for c in 0..<cols {
-                    let p = centre(r, c)
-                    if p.x > ink.minX && p.x < ink.maxX && p.y > ink.minY && p.y < ink.maxY { grid[r][c] = .blank }
-                }
-            }
-        }
-        if slashed {
-            // A diagonal of lit dots through the whole panel, with a dark moat
-            // cut through the type as well.
-            l.accent.clear(centre(0, 0), centre(rows - 1, cols - 1), width: pitch * 4.6)
-            for c in 0..<cols {
-                let y = Double(c) * Double(rows - 1) / Double(max(cols - 1, 1))
-                for r in 0..<rows {
-                    let d = abs(Double(r) - y)
-                    if d <= 0.75 { grid[r][c] = .ink } else if d <= 2.3 { grid[r][c] = .blank }
-                }
-            }
-        }
-
-        var paths: [Cell: Path] = [:]
-        for r in 0..<rows {
-            for c in 0..<cols where grid[r][c] != .blank {
-                paths[grid[r][c], default: Path()].addDot(centre(r, c), pitch * 0.36)
-            }
-        }
-        if let p = paths[.off] { l.ink.fill(p, fg(0.09)) }
-        if let p = paths[.ink] { l.ink.fill(p, fg()) }
-        for (cell, color) in colors { if let p = paths[cell] { l.accent.fill(p, color) } }
-        return l
-    }
-
     /// The number that matters most on the left, both windows on the right as
     /// dot bars with a "time left" tick, so you can see at a glance whether the
     /// headroom will outlast the clock.
@@ -423,8 +334,8 @@ enum Faces {
         case .waiting: ("...", "FETCHING", nil)
         case .normal:
             look.week == nil || (look.session != nil && look.sessionLeft <= look.weekLeft)
-                ? ("\(look.sessionLeft)", "% \(look.sessionLabel) LEFT", Palette.accent(look.provider))
-                : ("\(look.weekLeft)", "% \(look.weekLabel) LEFT", Palette.accent(look.provider))
+                ? ("\(look.sessionLeft)%", "\(look.sessionLabel) LEFT", Palette.accent(look.provider))
+                : ("\(look.weekLeft)%", "\(look.weekLabel) LEFT", Palette.accent(look.provider))
         case .sessionOut: (countdown(look) ?? "OUT", "UNTIL THE \(look.sessionLabel) RESET", Palette.yellow)
         case .weekOut: (countdown(look) ?? "OUT", "\(look.weekLabel) LIMIT HIT", Palette.grey)
         case .go: ("GO!", "\(look.provider.title.uppercased())'S BACK", Palette.accent(look.provider))
@@ -444,13 +355,6 @@ enum Faces {
         let x1 = w - pad
         dashRow(&l, look, look.sessionLabel, look.session, look.sessionLength, y: 30 * u, x0: x0, x1: x1, u: u)
         dashRow(&l, look, look.weekLabel, look.week, look.weekLength, y: 70 * u, x0: x0, x1: x1, u: u)
-
-        if look.mode == .weekOut {
-            let a = CGPoint(x: w * 0.04, y: h * 0.08), b = CGPoint(x: w * 0.96, y: h * 0.92)
-            l.ink.clear(a, b, width: 5.5 * u)
-            l.accent.clear(a, b, width: 5.5 * u)
-            l.accent.line(a, b, Palette.grey, width: 1.8 * u)
-        }
         return l
     }
 
@@ -486,7 +390,8 @@ enum Faces {
             } else if look.mode == .weekOut {
                 (0, Palette.grey, Palette.grey.opacity(0.45), false)
             } else {
-                (Int((Double(n) * Double(remaining) / 100).rounded()), Palette.accent(look.provider), fg(0.13), true)
+                // Any headroom at all lights a dot; an empty bar means OUT.
+                (remaining > 0 ? Int((Double(n) * Double(remaining) / 100).rounded(.up)) : 0, Palette.accent(look.provider), fg(0.13), true)
             }
         var onDots = Path(), offDots = Path()
         for i in 0..<n {
@@ -495,6 +400,10 @@ enum Faces {
         }
         l.accent.fill(onDots, on)
         if offOnInk { l.ink.fill(offDots, off) } else { l.accent.fill(offDots, off) }
+        // The spent window is struck through, leaving its labels readable.
+        if out && look.mode == .weekOut {
+            l.accent.line(CGPoint(x: bx0, y: y), CGPoint(x: bx0 + CGFloat(n) * spacing, y: y), Palette.grey, width: 1.2 * u)
+        }
 
         // The "time left" tick: headroom reaching past it means you'll last.
         let reset = e?.resetsAt
@@ -529,5 +438,247 @@ enum Faces {
             sub = out ? "RESET TIME UNKNOWN" : "WINDOW NOT STARTED"
         }
         l.ink.text(Placed(sub, font: subFont, tracking: 0.1, x: x0, baseline: y + 13 * u), fg(0.55))
+    }
+}
+
+// MARK: - The threads
+
+/// Every account's weekly limit as threads twisted round each other from left
+/// to right (Claude's accounts in orange and tan, Codex's in green). Each is
+/// bright for the share of its week that's left and faint where it's been used.
+/// No figures. `fancy` is the card's: a deeper twist, a fine ghost where the
+/// week's been used, and a bead where bright meets faint.
+struct ThreadsView: View {
+    let strands: [ThreadStrand]
+    var fancy = false
+
+    var body: some View {
+        Canvas { ctx, size in
+            ctx.drawLayer { layer in ThreadFace.straight(strands, &layer, size, fancy: fancy) }
+        }
+        .widgetAccentable()
+    }
+}
+
+/// The orbit: the same threads wound into concentric circles, one ring per
+/// family (Claude's accounts outside, Codex's inside), each bright clockwise
+/// from 12 o'clock for its week left.
+struct OrbitView: View {
+    /// Outermost first.
+    let rings: [[ThreadStrand]]
+
+    var body: some View {
+        Canvas { ctx, size in
+            ctx.drawLayer { layer in ThreadFace.orbit(rings, &layer, size) }
+        }
+        .widgetAccentable()
+    }
+}
+
+/// Draws threads along any path: every strand whole, then, at each crossing
+/// (`Braid.crossings`), a gap cleared round the front strand for as long as the
+/// two are close and the front strand drawn again over it. That gives true
+/// over-and-under for any number of strands with no seams, since nothing is
+/// cut into strips. Bright and faint are separate butt-ended pieces, so they
+/// meet square to the thread.
+enum ThreadFace {
+    /// A used stretch of thread: still there, only faint.
+    private static let spent = 0.2
+    /// Stale data keeps its shape but loses its color, as on the other faces.
+    private static let staleAlpha = 0.45
+
+    private struct Look {
+        let width: CGFloat
+        /// The used stretch: its width and alpha, as a share of the bright one's.
+        let ghostWidth: CGFloat
+        let ghostAlpha: Double
+        /// The gap cleared round a strand, bright and used.
+        let moat: CGFloat
+        let ghostMoat: CGFloat
+        /// The bead's radius and the gap cut round it, as multiples of the width; 0 is none.
+        var bead: CGFloat = 0
+        var beadCut: CGFloat = 0
+        /// On a ring, how far (a share of the turn) the bright stretch takes to fade
+        /// in from the faint one at 12 o'clock, so the start isn't a hard edge.
+        var fadeIn: Double = 0
+
+        static func of(_ sw: CGFloat, fancy: Bool) -> Look {
+            fancy
+                ? Look(width: sw, ghostWidth: sw * 0.55, ghostAlpha: 0.32, moat: sw * 1.9, ghostMoat: sw * 1.3, bead: 1.4, beadCut: 2.3)
+                // A gap a third of a strand each side: wide enough to read as a crossing,
+                // narrow enough that four strands in one band don't fall into dashes.
+                : Look(width: sw, ghostWidth: sw, ghostAlpha: spent, moat: sw * 1.7, ghostMoat: sw * 1.7)
+        }
+
+        /// The orbit's: the card's look with quieter beads and a quick fade-in at the top.
+        static func orbit(_ sw: CGFloat) -> Look {
+            var l = of(sw, fancy: true)
+            l.bead = 0.95
+            l.beadCut = 1.6
+            l.fadeIn = 0.07
+            return l
+        }
+    }
+
+    /// One braid: strand `i` at `point(i, u)`, u in 0...1 (any u when `closed`,
+    /// a ring), twisted by `twist(u)`, the braid's angle, a straight line in u.
+    private static func braid(
+        _ strands: [ThreadStrand], _ ctx: inout GraphicsContext, look: Look, closed: Bool,
+        twist: (Double) -> Double, point: (Int, Double) -> CGPoint
+    ) {
+        let count = strands.count
+        guard count > 0 else { return }
+        let colors = strands.map { Palette.member($0.family, $0.index).opacity($0.stale ? staleAlpha : 1) }
+        let splits = strands.map { min(max($0.left ?? 0, 0), 1) }
+        // a...b in bright and used pieces: (from, to, bright).
+        func pieces(_ i: Int, _ a: Double, _ b: Double) -> [(Double, Double, Bool)] {
+            var cuts = [a, b]
+            if closed {
+                for k in Int(floor(a))...Int(ceil(b)) { cuts += [Double(k), Double(k) + splits[i]] }
+            } else {
+                cuts.append(splits[i])
+            }
+            let sorted = Array(Set(cuts.filter { $0 >= a && $0 <= b })).sorted()
+            return zip(sorted, sorted.dropFirst()).compactMap { from, to in
+                guard to - from > 1e-6 else { return nil }
+                let mid = (from + to) / 2
+                return (from, to, (closed ? mid - floor(mid) : mid) < splits[i])
+            }
+        }
+        func path(_ i: Int, _ a: Double, _ b: Double) -> Path {
+            var p = Path()
+            let n = max(Int((b - a) / 0.002), 2)
+            for k in 0...n {
+                let pt = point(i, a + (b - a) * Double(k) / Double(n))
+                if k == 0 { p.move(to: pt) } else { p.addLine(to: pt) }
+            }
+            return p
+        }
+        let butt = { (w: CGFloat) in StrokeStyle(lineWidth: w, lineCap: .butt, lineJoin: .round) }
+        let fading = closed && look.fadeIn > 0
+        // A bright piece split where it fades in: (from, to, fading).
+        func spans(_ from: Double, _ to: Double) -> [(Double, Double, Bool)] {
+            guard fading else { return [(from, to, false)] }
+            var cuts = [from, to]
+            for k in Int(floor(from))...Int(ceil(to)) { cuts += [Double(k), Double(k) + look.fadeIn] }
+            let sorted = Array(Set(cuts.filter { $0 >= from && $0 <= to })).sorted()
+            return zip(sorted, sorted.dropFirst()).filter { $0.1 - $0.0 > 1e-6 }.map { x, y in
+                let mid = (x + y) / 2
+                return (x, y, mid - floor(mid) < look.fadeIn)
+            }
+        }
+        // Eased, so it's quick but not a step.
+        let easing = stride(from: 0.0, through: 1.0, by: 0.125).map { x in (x, x * x * (3 - 2 * x)) }
+        func draw(_ i: Int, _ a: Double, _ b: Double, clearing: Bool) {
+            for (from, to, bright) in pieces(i, a, b) {
+                for (x, y, fade) in bright ? spans(from, to) : [(from, to, false)] {
+                    let p = path(i, x, y)
+                    if clearing {
+                        var gap = ctx
+                        gap.blendMode = .clear
+                        gap.stroke(p, with: .color(.black), style: butt(bright ? look.moat : look.ghostMoat))
+                    }
+                    if fade {
+                        // One stroke with a gradient along the fade, over the faint thread,
+                        // so the strand carries on and brightens without seams.
+                        let start = floor((x + y) / 2)
+                        ctx.stroke(p, with: .color(colors[i].opacity(look.ghostAlpha)), style: butt(look.ghostWidth))
+                        let stops = easing.map { Gradient.Stop(color: colors[i].opacity($0.1), location: $0.0) }
+                        ctx.stroke(p, with: .linearGradient(Gradient(stops: stops), startPoint: point(i, start), endPoint: point(i, start + look.fadeIn)),
+                                   style: butt(look.width))
+                    } else {
+                        // Over a cleared gap, the bright redraw runs a hair past it each
+                        // end: two anti-aliased butt edges on one line leave a seam.
+                        let q = clearing && bright ? path(i, x - 0.003, y + 0.003) : p
+                        ctx.stroke(q, with: .color(bright ? colors[i] : colors[i].opacity(look.ghostAlpha)), style: butt(bright ? look.width : look.ghostWidth))
+                    }
+                }
+            }
+        }
+
+        for i in 0..<count { draw(i, 0, 1, clearing: false) }
+
+        // Each crossing: how far either side the two stay within a gap's reach,
+        // then the front strand again over a cleared gap for that stretch.
+        let t0 = twist(0), t1 = twist(1)
+        let reach = (max(look.moat, look.ghostMoat) + look.width) / 2 * 1.15
+        func apart(_ c: Braid.Crossing, _ u: Double) -> Bool {
+            let f = point(c.front, u), b = point(c.back, u)
+            return hypot(f.x - b.x, f.y - b.y) > reach
+        }
+        for c in Braid.crossings(count, from: t0, to: t1) {
+            let uc = (c.t - t0) / (t1 - t0)
+            var a = uc, b = uc
+            while uc - a < 0.2 && !apart(c, a) { a -= 0.001 }
+            while b - uc < 0.2 && !apart(c, b) { b += 0.001 }
+            if !closed { a = max(a, 0); b = min(b, 1) }
+            draw(c.front, a, b, clearing: true)
+        }
+
+        // A bead where each thread's week runs out: "you are here", cut clear of
+        // what's under it. Every cut first, then every bead, so two beads that
+        // meet both stay whole.
+        guard look.bead > 0 else { return }
+        let beads = (0..<count).filter { splits[$0] > 0 && splits[$0] < 1 }
+        for i in beads {
+            var gap = ctx
+            gap.blendMode = .clear
+            gap.fill(.dot(point(i, splits[i]), look.width * look.beadCut), with: .color(.black))
+        }
+        for i in beads { ctx.fill(.dot(point(i, splits[i]), look.width * look.bead), with: .color(colors[i])) }
+    }
+
+    /// The threads widget and the card's foot: a low, long wave, left to right.
+    static func straight(_ strands: [ThreadStrand], _ ctx: inout GraphicsContext, _ size: CGSize, fancy: Bool) {
+        guard strands.count >= 2 else { return }
+        let w = size.width, h = size.height
+        let pad = h * 0.16
+        // The card's strands are finer than the widget's.
+        let sw = h * (fancy ? 0.049 : 0.06)
+        let x0 = pad + sw, x1 = w - pad - sw
+        // A low, long wave: the threads cross at a shallow angle.
+        let amp = (h / 2 - pad - sw / 2) * (fancy ? 0.8 : 0.6)
+        guard x1 > x0, amp > 0 else { return }
+        // A whole number of half twists.
+        let halves = max(Int(((x1 - x0) / (amp * 6)).rounded()), 1)
+        let count = strands.count
+        func x(_ u: Double) -> CGFloat { x0 + CGFloat(u) * (x1 - x0) }
+        braid(
+            strands, &ctx, look: .of(sw, fancy: fancy), closed: false,
+            twist: { .pi * Double(halves) * $0 },
+            point: { i, u in CGPoint(x: x(u), y: h / 2 + amp * CGFloat(Braid.offset(i, of: count, at: .pi * Double(halves) * u))) }
+        )
+    }
+
+    /// One ring of the orbit: the family's strands wound round `centre`.
+    private static func ring(_ strands: [ThreadStrand], _ ctx: inout GraphicsContext, centre: CGPoint, radius: CGFloat, amp: CGFloat, sw: CGFloat) {
+        let count = strands.count
+        guard count > 0 else { return }
+        // A lone strand has nothing to twist round: a plain circle.
+        let a = count > 1 ? amp : 0
+        // Whole twists per turn, so every strand closes on itself.
+        let twists = max(Int((2 * .pi * radius / (12 * max(amp, 1))).rounded()), 1)
+        func t(_ u: Double) -> Double { 2 * .pi * Double(twists) * u }
+        func angle(_ u: Double) -> Double { -.pi / 2 + 2 * .pi * u }
+        braid(
+            strands, &ctx, look: .orbit(sw), closed: true,
+            twist: t,
+            point: { i, u in
+                let r = radius + a * CGFloat(Braid.offset(i, of: count, at: t(u)))
+                return CGPoint(x: centre.x + r * CGFloat(cos(angle(u))), y: centre.y + r * CGFloat(sin(angle(u))))
+            }
+        )
+    }
+
+    /// Concentric rings, outermost first, filling the square.
+    static func orbit(_ rings: [[ThreadStrand]], _ ctx: inout GraphicsContext, _ size: CGSize) {
+        let s = min(size.width, size.height)
+        let centre = CGPoint(x: size.width / 2, y: size.height / 2)
+        let sw = s * 0.028
+        let radii: [CGFloat] = [0.355, 0.205]
+        let amps: [CGFloat] = [0.05, 0.04]
+        for (k, strands) in rings.prefix(radii.count).enumerated() {
+            ring(strands, &ctx, centre: centre, radius: s * radii[k], amp: s * amps[k], sw: sw)
+        }
     }
 }

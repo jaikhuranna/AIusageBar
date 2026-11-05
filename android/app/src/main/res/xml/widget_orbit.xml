@@ -5,8 +5,8 @@
     android:targetCellWidth="2"
     android:targetCellHeight="2"
     android:initialLayout="@layout/widget_card"
-    android:previewImage="@drawable/preview_matrix"
-    android:description="@string/widget_matrix_desc"
+    android:previewImage="@drawable/preview_orbit"
+    android:description="@string/widget_orbit_desc"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:updatePeriodMillis="0" />

@@ -1,12 +1,14 @@
 import Foundation
 
-/// The AIusageBar bridge's HTTP API: `/usage` and `/pair`. The widgets render
+/// The AIusageBar bridge's HTTP API: `/usage`, `/pool` and `/pair`. The widgets render
 /// what they fetch and never derive alerts, so there's no `/events`.
 enum Bridge {
     enum Usage {
         case fresh(body: String, etag: String?)
         case notModified
         case unauthorized
+        /// The bridge doesn't have this endpoint: an older server, for `/pool`.
+        case notFound
         case failed(String)
     }
 
@@ -31,7 +33,16 @@ enum Bridge {
     }()
 
     static func usage(base: String, token: String, etag: String?, provider: UsageProvider = .claude) async -> Usage {
-        guard let url = URL(string: base + "/usage?provider=\(provider.rawValue)") else { return .failed("bad address") }
+        await get(base + "/usage?provider=\(provider.rawValue)", token: token, etag: etag)
+    }
+
+    /// `GET /pool`: one family's pooled limits, history and projection. Older bridges answer 404.
+    static func pool(base: String, token: String, etag: String?, family: PoolFamily) async -> Usage {
+        await get(base + "/pool?family=\(family.rawValue)", token: token, etag: etag)
+    }
+
+    private static func get(_ address: String, token: String, etag: String?) async -> Usage {
+        guard let url = URL(string: address) else { return .failed("bad address") }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let etag { req.setValue(etag, forHTTPHeaderField: "If-None-Match") }
@@ -42,6 +53,7 @@ enum Bridge {
             case 200: return .fresh(body: String(decoding: data, as: UTF8.self), etag: http?.value(forHTTPHeaderField: "ETag"))
             case 304: return .notModified
             case 401: return .unauthorized
+            case 404: return .notFound
             case let code: return .failed("HTTP \(code)")
             }
         } catch {

@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Shader
+import android.graphics.LinearGradient
 import android.graphics.Path
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
@@ -14,6 +16,9 @@ import android.graphics.Typeface
 import androidx.core.graphics.createBitmap
 import java.time.Duration
 import kotlin.math.abs
+import kotlin.math.hypot
+import kotlin.math.floor
+import kotlin.math.PI
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.max
@@ -34,8 +39,8 @@ class Layers(val w: Int, val h: Int) {
     val accCanvas = Canvas(accent)
 }
 
-/** [POOL] is the 1x1: the ring, drawn for a whole family of accounts. */
-enum class Style { RING, MATRIX, DASH, THREAD, POOL }
+/** [POOL] is the 1x1: the ring, drawn for a whole family of accounts. [ORBIT] is the threads wound into rings. */
+enum class Style { RING, ORBIT, DASH, THREAD, POOL }
 
 /** One thread of [Style.THREAD]: an account's week, bright for [left] (0..1, null unknown). */
 data class ThreadStrand(val color: Int, val left: Float?, val stale: Boolean)
@@ -72,15 +77,14 @@ object Render {
     /** Stale data keeps its shape but loses its color. */
     private const val STALE_ALPHA = 115
 
-    /** Every face but the threads, which draw many accounts at once ([threads]). */
+    /** Every face but the threads and the orbit, which draw many accounts at once ([threads], [orbit]). */
     fun draw(ctx: Context, style: Style, look: Look, w: Int, h: Int): Layers {
         val l = Layers(w.coerceAtLeast(1), h.coerceAtLeast(1))
         if (look.stale) l.accCanvas.saveLayerAlpha(null, STALE_ALPHA)
         when (style) {
             Style.RING, Style.POOL -> RingFace.draw(look, l)
-            Style.MATRIX -> MatrixFace.draw(look, l)
             Style.DASH -> DashFace.draw(ctx, look, l)
-            Style.THREAD -> {}
+            Style.THREAD, Style.ORBIT -> {}
         }
         if (look.stale) l.accCanvas.restore()
         return l
@@ -100,7 +104,15 @@ object Render {
      * meets the other.
      */
     fun threads(strands: List<ThreadStrand>, w: Int, h: Int, fancy: Boolean = false): Layers =
-        Layers(w.coerceAtLeast(1), h.coerceAtLeast(1)).also { ThreadFace.draw(strands, it, fancy) }
+        Layers(w.coerceAtLeast(1), h.coerceAtLeast(1)).also { ThreadFace.straight(strands, it, fancy) }
+
+    /**
+     * The 2x2 orbit: the same threads wound into concentric rings, one per
+     * family, outermost first (Claude's accounts outside, Codex's inside), each
+     * bright clockwise from 12 o'clock for its week left.
+     */
+    fun orbit(rings: List<List<ThreadStrand>>, w: Int, h: Int): Layers =
+        Layers(w.coerceAtLeast(1), h.coerceAtLeast(1)).also { ThreadFace.orbit(rings, it) }
 }
 
 internal fun fill(color: Int, alpha: Float = 1f) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -226,133 +238,6 @@ private object RingFace {
             Mode.GO -> {
                 acc.drawArc(ring, 0f, 360f, false, stroke(Render.accent(look), sw))
                 acc.fitText("GO!", RectF(cx - pieR * 1.05f, cy - pieR * 0.55f, cx + pieR * 1.05f, cy + pieR * 0.55f), headline(Render.accent(look)))
-            }
-        }
-    }
-}
-
-/**
- * A 2x2 LED panel: the session's headroom as a big dot-matrix number, the week
- * as a bar of dots along the bottom. Every cell is a dot, lit or not.
- */
-private object MatrixFace {
-    private const val COLS = 38
-    private const val OFF = 0
-    private const val INK = 1
-    private const val ORANGE = 2
-    private const val YELLOW = 3
-    private const val GREY = 4
-    private const val BLANK = 5
-
-    fun draw(look: Look, l: Layers) {
-        // Inset, so the panel sits inside the card's rounded corners.
-        val inset = min(l.w, l.h) * 0.08f
-        val aw = l.w - 2 * inset
-        val ah = l.h - 2 * inset
-        val pitch = min(aw / COLS, ah / 26f)
-        val cols = (aw / pitch).toInt()
-        val rows = (ah / pitch).toInt()
-        val ox = (l.w - cols * pitch) / 2
-        val oy = (l.h - rows * pitch) / 2
-        val grid = Array(rows) { IntArray(cols) }
-
-        fun put(text: String, col: Int, row: Int, v: Int, scale: Int = 1) =
-            DotFont.forEachDot(text, scale) { c, r ->
-                if (row + r in 0 until rows && col + c in 0 until cols) grid[row + r][col + c] = v
-            }
-        fun putRight(text: String, right: Int, row: Int, v: Int) = put(text, right - DotFont.width(text) + 1, row, v)
-        fun putCentered(text: String, row: Int, v: Int) = put(text, (cols - DotFont.width(text)) / 2, row, v)
-
-        // Top labels, a big middle, a labelled bar: 7 + gap + 14 + gap + 7 rows.
-        val gap = ((rows - 2 - 28) / 2).coerceIn(0, 4)
-        val top = ((rows - (28 + 2 * gap)) / 2).coerceAtLeast(0)
-        val mid = top + 7 + gap
-        val bottom = mid + 14 + gap
-        // The big middle is set in type, not dots: see [Fonts].
-        var big: Pair<String, Int>? = null
-        var slashed = false
-        fun bar(label: String, labelV: Int, percent: Int, v: Int) {
-            put(label, 1, bottom, labelV)
-            val x0 = 1 + DotFont.width(label) + 2
-            val x1 = cols - 2
-            val lit = if (percent > 0) ceil((x1 - x0 + 1) * percent / 100f).toInt() else 0
-            for (c in x0..x1) for (r in bottom + 2..bottom + 4) {
-                if (r in 0 until rows) grid[r][c] = if (c - x0 < lit) v else OFF
-            }
-        }
-
-        when (look.mode) {
-            Mode.UNPAIRED -> big = "PAIR" to INK
-            Mode.WAITING -> big = "…" to INK
-            Mode.NORMAL -> {
-                put(look.sessionLabel, 1, top, INK)
-                putRight(shortCountdown(look.now, look.session?.resetsAt), cols - 2, top, INK)
-                big = (if (look.session == null) "--" else "${look.sessionLeft}%") to ORANGE
-                bar(look.weekLabel, INK, look.weekLeft, ORANGE)
-            }
-            Mode.SESSION_OUT -> {
-                put(look.sessionLabel, 1, top, YELLOW)
-                putRight("OUT", cols - 2, top, YELLOW)
-                big = (look.countdownTo?.let { countdownText(look.now, it) } ?: "OUT") to YELLOW
-                bar(look.weekLabel, INK, look.weekLeft, ORANGE)
-            }
-            Mode.WEEK_OUT -> {
-                put(look.weekLabel, 1, top, GREY)
-                putRight("OUT", cols - 2, top, GREY)
-                big = (look.countdownTo?.let { countdownText(look.now, it) } ?: "--") to GREY
-                bar(look.sessionLabel, GREY, 0, GREY)
-                slashed = true
-            }
-            Mode.GO -> {
-                putCentered(look.provider.title.uppercase(), top, INK)
-                big = "GO!" to ORANGE
-                bar(look.weekLabel, INK, look.weekLeft, ORANGE)
-            }
-        }
-
-        big?.let { (text, v) ->
-            val canvas = if (v == INK) l.inkCanvas else l.accCanvas
-            val color = when (v) {
-                ORANGE -> Render.accent(look)
-                YELLOW -> Render.YELLOW
-                GREY -> Render.GREY
-                else -> Color.WHITE
-            }
-            val box = RectF(ox + 1.5f * pitch, oy + (mid + 1) * pitch, ox + (cols - 1.5f) * pitch, oy + (mid + 13) * pitch)
-            val ink = canvas.fitText(text, box, headline(color))
-            // Switch off the dots under the type, one cell of margin around it.
-            for (r in 0 until rows) for (c in 0 until cols) {
-                val x = ox + (c + 0.5f) * pitch
-                val y = oy + (r + 0.5f) * pitch
-                if (x > ink.left - pitch && x < ink.right + pitch && y > ink.top - pitch && y < ink.bottom + pitch) grid[r][c] = BLANK
-            }
-        }
-        if (slashed) {
-            // A diagonal of lit dots through the panel, with a dark moat. It
-            // passes behind the countdown, so the time to the reset stays readable.
-            val type = Array(rows) { r -> BooleanArray(cols) { c -> grid[r][c] == BLANK } }
-            for (c in 0 until cols) {
-                val y = c * (rows - 1f) / (cols - 1)
-                for (r in 0 until rows) {
-                    if (type[r][c]) continue
-                    val d = kotlin.math.abs(r - y)
-                    if (d <= 0.75f) grid[r][c] = GREY else if (d <= 2.3f) grid[r][c] = BLANK
-                }
-            }
-        }
-
-        val rad = pitch * 0.36f
-        val off = ink(0.09f)
-        val on = ink()
-        val paints = mapOf(ORANGE to fill(Render.accent(look)), YELLOW to fill(Render.YELLOW), GREY to fill(Render.GREY))
-        for (r in 0 until rows) for (c in 0 until cols) {
-            val x = ox + (c + 0.5f) * pitch
-            val y = oy + (r + 0.5f) * pitch
-            when (val v = grid[r][c]) {
-                BLANK -> {}
-                OFF -> l.inkCanvas.drawCircle(x, y, rad, off)
-                INK -> l.inkCanvas.drawCircle(x, y, rad, on)
-                else -> l.accCanvas.drawCircle(x, y, rad, paints.getValue(v))
             }
         }
     }
@@ -501,110 +386,206 @@ private object DashFace {
 }
 
 /**
- * The 4x1, and the foot of the card: every account's weekly limit as threads
- * twisted round each other from left to right (Claude's accounts in orange and
- * tan, Codex's in green). Each is bright for the share of its week that's left
- * and faint where it's been used, so they read against each other at a
- * glance. No figures. The crossings alternate over and under, like a real
- * twist. Two strands are exact opposites; three are a third of a turn apart,
- * and the same slicing draws any number.
+ * The 4x1, the foot of the card, and the 2x2 orbit: every account's weekly
+ * limit as threads twisted round each other (Claude's accounts in orange and
+ * tan, Codex's in green), bright for the share of its week left and faint
+ * where it's been used. No figures.
+ *
+ * Every strand is drawn whole; then at each crossing ([Braid.crossings]) a gap
+ * is cleared round the front strand for as long as the two are close, and the
+ * front strand is drawn again over it. That gives true over-and-under for any
+ * number of strands with no seams, since nothing is cut into strips. Bright and
+ * faint are separate butt-ended pieces, so they meet square to the thread.
  */
 private object ThreadFace {
     /** A used stretch of thread: still there, only faint. */
     private const val SPENT = 0.2f
     /** Stale data keeps its shape but loses its color, as on the other faces. */
     private const val STALE = 0.45f
+    /** How far (a share of the braid) a crossing's bright redraw overlaps the strand either side. */
+    private const val SEAM = 0.003
 
-    fun draw(strands: List<ThreadStrand>, l: Layers, fancy: Boolean) {
+    /**
+     * [bead] and [beadCut] are the bead's radius and the gap round it, as
+     * multiples of the width (0 is none). [fadeIn], on a ring, is how far (a
+     * share of the turn) the bright stretch takes to fade in from the faint one
+     * at 12 o'clock, so the start isn't a hard edge.
+     */
+    private data class Look(
+        val width: Float, val ghostWidth: Float, val ghostAlpha: Float, val moat: Float, val ghostMoat: Float,
+        val bead: Float = 0f, val beadCut: Float = 0f, val fadeIn: Double = 0.0,
+    ) {
+        companion object {
+            /** [fancy] is the card's: a fine ghost for the used stretch, a narrower gap round it, and beads. */
+            fun of(sw: Float, fancy: Boolean) =
+                if (fancy) Look(sw, sw * 0.55f, 0.32f, sw * 1.9f, sw * 1.3f, bead = 1.4f, beadCut = 2.3f)
+                // A gap a third of a strand each side: wide enough to read as a crossing,
+                // narrow enough that four strands in one band don't fall into dashes.
+                else Look(sw, sw, SPENT, sw * 1.7f, sw * 1.7f)
+
+            /** The orbit's: the card's look with quieter beads and a quick fade-in at the top. */
+            fun orbit(sw: Float) = of(sw, fancy = true).copy(bead = 0.95f, beadCut = 1.6f, fadeIn = 0.07)
+        }
+    }
+
+    private fun line(color: Int, width: Float, alpha: Float) = stroke(color, width, alpha, round = false).apply { strokeJoin = Paint.Join.ROUND }
+    private fun gap(width: Float) = Paint(CLEAR).apply { strokeWidth = width; strokeCap = Paint.Cap.BUTT; strokeJoin = Paint.Join.ROUND }
+
+    /**
+     * One braid: strand `i` at `point(i, u)` for u in 0..1 (any u when
+     * [closed], a ring), twisted by `twist(u)`, the braid's angle, a straight
+     * line in u.
+     */
+    private fun braid(
+        strands: List<ThreadStrand>, acc: Canvas, look: Look, closed: Boolean,
+        twist: (Double) -> Double, point: (Int, Double) -> Pair<Float, Float>,
+    ) {
+        val count = strands.size
+        if (count == 0) return
+        val alphas = strands.map { if (it.stale) STALE else 1f }
+        val splits = strands.map { (it.left ?: 0f).coerceIn(0f, 1f).toDouble() }
+
+        /** a..b in bright and used pieces: (from, to, bright). */
+        fun pieces(i: Int, a: Double, b: Double): List<Triple<Double, Double, Boolean>> {
+            val cuts = mutableListOf(a, b)
+            if (closed) for (k in floor(a).toInt()..ceil(b).toInt()) cuts += listOf(k.toDouble(), k + splits[i])
+            else cuts += splits[i]
+            val sorted = cuts.filter { it in a..b }.distinct().sorted()
+            return sorted.zipWithNext().mapNotNull { (from, to) ->
+                if (to - from <= 1e-6) return@mapNotNull null
+                val mid = (from + to) / 2
+                Triple(from, to, (if (closed) mid - floor(mid) else mid) < splits[i])
+            }
+        }
+        fun path(i: Int, a: Double, b: Double) = Path().apply {
+            val n = ((b - a) / 0.002).toInt().coerceAtLeast(2)
+            for (k in 0..n) {
+                val (x, y) = point(i, a + (b - a) * k / n)
+                if (k == 0) moveTo(x, y) else lineTo(x, y)
+            }
+        }
+        val fading = closed && look.fadeIn > 0
+        /** A bright piece split where it fades in: (from, to, fading). */
+        fun spans(from: Double, to: Double): List<Triple<Double, Double, Boolean>> {
+            if (!fading) return listOf(Triple(from, to, false))
+            val cuts = mutableListOf(from, to)
+            for (k in floor(from).toInt()..ceil(to).toInt()) cuts += listOf(k.toDouble(), k + look.fadeIn)
+            return cuts.filter { it in from..to }.distinct().sorted().zipWithNext().filter { it.second - it.first > 1e-6 }.map { (x, y) ->
+                val mid = (x + y) / 2
+                Triple(x, y, mid - floor(mid) < look.fadeIn)
+            }
+        }
+        // Eased, so it's quick but not a step.
+        val stops = FloatArray(9) { it / 8f }
+        fun fadePaint(i: Int, start: Double): Paint {
+            val (x0, y0) = point(i, start)
+            val (x1, y1) = point(i, start + look.fadeIn)
+            val colors = IntArray(stops.size) { k ->
+                val x = stops[k]
+                val a = (x * x * (3 - 2 * x)) * alphas[i]
+                (strands[i].color and 0xFFFFFF) or ((a * 255).roundToInt().coerceIn(0, 255) shl 24)
+            }
+            return line(Color.WHITE, look.width, 1f).apply { shader = LinearGradient(x0, y0, x1, y1, colors, stops, Shader.TileMode.CLAMP) }
+        }
+        fun draw(i: Int, a: Double, b: Double, clearing: Boolean) {
+            for ((from, to, bright) in pieces(i, a, b)) {
+                for ((x, y, fade) in if (bright) spans(from, to) else listOf(Triple(from, to, false))) {
+                    val p = path(i, x, y)
+                    if (clearing) acc.drawPath(p, gap(if (bright) look.moat else look.ghostMoat))
+                    if (fade) {
+                        // One stroke with a gradient along the fade, over the faint thread,
+                        // so the strand carries on and brightens without seams.
+                        acc.drawPath(p, line(strands[i].color, look.ghostWidth, alphas[i] * look.ghostAlpha))
+                        acc.drawPath(p, fadePaint(i, floor((x + y) / 2)))
+                    } else {
+                        // Over a cleared gap, the bright redraw runs a hair past it each
+                        // end: two anti-aliased butt edges on one line leave a seam.
+                        val q = if (clearing && bright) path(i, x - SEAM, y + SEAM) else p
+                        acc.drawPath(q, if (bright) line(strands[i].color, look.width, alphas[i]) else line(strands[i].color, look.ghostWidth, alphas[i] * look.ghostAlpha))
+                    }
+                }
+            }
+        }
+
+        for (i in 0 until count) draw(i, 0.0, 1.0, clearing = false)
+
+        // Each crossing: how far either side the two stay within a gap's reach,
+        // then the front strand again over a cleared gap for that stretch.
+        val t0 = twist(0.0)
+        val t1 = twist(1.0)
+        val reach = (max(look.moat, look.ghostMoat) + look.width) / 2 * 1.15f
+        fun apart(c: Braid.Crossing, u: Double): Boolean {
+            val (fx, fy) = point(c.front, u)
+            val (bx, by) = point(c.back, u)
+            return hypot(fx - bx, fy - by) > reach
+        }
+        for (c in Braid.crossings(count, t0, t1)) {
+            val uc = (c.t - t0) / (t1 - t0)
+            var a = uc
+            var b = uc
+            while (uc - a < 0.2 && !apart(c, a)) a -= 0.001
+            while (b - uc < 0.2 && !apart(c, b)) b += 0.001
+            if (!closed) {
+                a = a.coerceAtLeast(0.0)
+                b = b.coerceAtMost(1.0)
+            }
+            draw(c.front, a, b, clearing = true)
+        }
+
+        // A bead where each thread's week runs out: "you are here", cut clear of
+        // what's under it. Every cut first, then every bead, so two beads that
+        // meet both stay whole.
+        if (look.bead <= 0f) return
+        val beads = (0 until count).filter { splits[it] > 0 && splits[it] < 1 }
+        beads.forEach { i -> val (x, y) = point(i, splits[i]); acc.drawCircle(x, y, look.width * look.beadCut, Paint(CLEAR).apply { style = Paint.Style.FILL }) }
+        beads.forEach { i -> val (x, y) = point(i, splits[i]); acc.drawCircle(x, y, look.width * look.bead, fill(strands[i].color, alphas[i])) }
+    }
+
+    /** The 4x1 and the card's foot: a low, long wave, left to right. */
+    fun straight(strands: List<ThreadStrand>, l: Layers, fancy: Boolean) {
         val count = strands.size
         if (count < 2) return
         val w = l.w.toFloat()
         val h = l.h.toFloat()
-        val acc = l.accCanvas
         val pad = h * 0.16f
-        // The card's strands are finer than the widget's (a quarter thinner than they were).
+        // The card's strands are finer than the widget's.
         val sw = h * (if (fancy) 0.049f else 0.06f)
         val x0 = pad + sw
         val x1 = w - pad - sw
-        val cy = h / 2
         // A low, long wave: the threads cross at a shallow angle (about 28°).
         val amp = (h / 2 - pad - sw / 2) * (if (fancy) 0.8f else 0.6f)
         if (x1 <= x0 || amp <= 0f) return
-        // A whole number of half twists, so the slices end exactly at x1.
-        val n = ((x1 - x0) / (amp * 6f)).roundToInt().coerceAtLeast(1)
-        val half = (x1 - x0) / n
+        // A whole number of half twists.
+        val halves = ((x1 - x0) / (amp * 6f)).roundToInt().coerceAtLeast(1)
+        fun t(u: Double) = PI * halves * u
+        braid(strands, l.accCanvas, Look.of(sw, fancy), closed = false, twist = ::t) { i, u ->
+            (x0 + u.toFloat() * (x1 - x0)) to (h / 2 + amp * Braid.offset(i, count, t(u)).toFloat())
+        }
+    }
 
-        // Strand i is offset by i/count of a turn. Every pair crosses twice a
-        // turn, so crossings come every half / pairs, the first at `first`.
-        val pairs = count * (count - 1) / 2
-        val slice = half / pairs
-        val first = x0 + half * (0.5f - 1f / count)
-        fun y(i: Int, x: Float) = cy + amp * sin(Math.PI * (x - x0) / half + Math.PI + 2 * Math.PI * i / count).toFloat()
-        fun path(i: Int, from: Float, to: Float) = Path().apply {
-            moveTo(from, y(i, from))
-            var x = from
-            while (x < to) {
-                x = min(x + 1f, to)
-                lineTo(x, y(i, x))
+    /** Concentric rings, outermost first, filling the square. */
+    fun orbit(rings: List<List<ThreadStrand>>, l: Layers) {
+        val s = min(l.w, l.h).toFloat()
+        val cx = l.w / 2f
+        val cy = l.h / 2f
+        val sw = s * 0.028f
+        val radii = floatArrayOf(0.355f, 0.205f)
+        val amps = floatArrayOf(0.05f, 0.04f)
+        rings.take(radii.size).forEachIndexed { k, strands ->
+            val count = strands.size
+            if (count == 0) return@forEachIndexed
+            val radius = s * radii[k]
+            val amp = s * amps[k]
+            // A lone strand has nothing to twist round: a plain circle.
+            val a = if (count > 1) amp else 0f
+            // Whole twists per turn, so every strand closes on itself.
+            val twists = (2 * PI * radius / (12 * amp.coerceAtLeast(1f))).roundToInt().coerceAtLeast(1)
+            fun t(u: Double) = 2 * PI * twists * u
+            braid(strands, l.accCanvas, Look.orbit(sw), closed = true, twist = ::t) { i, u ->
+                val r = radius + a * Braid.offset(i, count, t(u)).toFloat()
+                val angle = -PI / 2 + 2 * PI * u
+                (cx + r * cos(angle).toFloat()) to (cy + r * sin(angle).toFloat())
             }
-        }
-        class Line(val index: Int, s: ThreadStrand) {
-            val color = s.color
-            val alpha = if (s.stale) STALE else 1f
-            val path = path(index, x0, x1)
-            val split = x0 + (s.left ?: 0f).coerceIn(0f, 1f) * (x1 - x0)
-            // Separate paths with butt ends, so bright meets faint square to the thread.
-            val lit = if (split > x0) path(index, x0, split) else null
-            val spent = if (split < x1) path(index, split, x1) else null
-
-            fun drawIn(left: Float, right: Float) {
-                acc.save()
-                acc.clipRect(left, 0f, right, h)
-                lit?.let { acc.drawPath(it, stroke(color, sw, alpha, round = false)) }
-                spent?.let {
-                    // The card's ghost is finer, so the bright stretches lead.
-                    if (fancy) acc.drawPath(it, stroke(color, sw * 0.55f, alpha * 0.32f, round = false))
-                    else acc.drawPath(it, stroke(color, sw, alpha * SPENT, round = false))
-                }
-                acc.restore()
-            }
-        }
-        val lines = strands.mapIndexed { i, s -> Line(i, s) }
-        val moat = Paint(CLEAR).apply { strokeWidth = sw * 2.2f }
-
-        // One slice per crossing, cut where the threads are furthest apart. In
-        // each, the strands not crossing first, then the lower of the pair, then
-        // a gap cleared around the upper one, then the upper one. The cuts are
-        // on whole pixels, so slices tile cleanly.
-        val last = generateSequence(0) { it + 1 }.takeWhile { first + it * slice <= x1 + 0.5f }.last()
-        for (k in 0..last) {
-            val centre = first + k * slice
-            val left = if (k == 0) 0f else (centre - slice / 2).roundToInt().toFloat()
-            val right = if (k == last) w else (centre + slice / 2).roundToInt().toFloat()
-            // The pair crossing here is the closest two at the middle of the slice.
-            val (a, b) = lines.flatMap { p -> lines.filter { it.index > p.index }.map { p to it } }
-                .minBy { (p, q) -> abs(y(p.index, centre) - y(q.index, centre)) }
-            val (under, over) = if (k % 2 == 0) b to a else a to b
-            lines.filter { it !== a && it !== b }.forEach { it.drawIn(left, right) }
-            under.drawIn(left, right)
-            acc.save()
-            acc.clipRect(left, 0f, right, h)
-            if (fancy) {
-                // The fine ghost only needs a gap as fine as itself.
-                over.lit?.let { acc.drawPath(it, moat) }
-                over.spent?.let { acc.drawPath(it, Paint(moat).apply { strokeWidth = sw * 1.5f }) }
-            } else acc.drawPath(over.path, moat)
-            acc.restore()
-            over.drawIn(left, right)
-        }
-
-        // A bead where each thread's week runs out: "you are here", cut clear of what's under it.
-        // Every cut first, then every bead, so two beads that meet both stay whole.
-        if (fancy) {
-            val beads = lines.filter { it.split > x0 && it.split < x1 }
-            // Sized as before the strands were thinned, so "you are here" still reads.
-            beads.forEach { acc.drawCircle(it.split, y(it.index, it.split), sw * 2.3f, Paint(CLEAR).apply { style = Paint.Style.FILL }) }
-            beads.forEach { acc.drawCircle(it.split, y(it.index, it.split), sw * 1.4f, fill(it.color, it.alpha)) }
         }
     }
 }

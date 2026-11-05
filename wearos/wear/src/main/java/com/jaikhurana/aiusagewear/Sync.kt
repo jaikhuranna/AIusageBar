@@ -54,13 +54,13 @@ object Sync {
 
         val now = System.currentTimeMillis()
         val recent = store.lastError == null && now - store.fetchedAt < MANUAL_THROTTLE_MS
-        val before = store.snapshotJson to store.lastError
+        val before = listOf(store.snapshotJson, store.lastError) + PoolFamily.entries.map { store.poolJson(it) }
         if (force || !(manual && recent)) fetch(ctx, store, listOfNotNull(base, store.lanUrl).distinct(), token, now)
 
         val snap = store.snapshot()
         Alerts.syncComeback(ctx, store, snap)
         // A 304 changes nothing a surface shows, so don't wake them for it.
-        if (store.snapshotJson to store.lastError != before) Surfaces.refresh(ctx)
+        if (listOf(store.snapshotJson, store.lastError) + PoolFamily.entries.map { store.poolJson(it) } != before) Surfaces.refresh(ctx)
         if (store.lastError == Store.ERROR_UNPAIRED) {
             Scheduler.cancel(ctx) // polling can't fix a revoked token; the app asks to pair again
         } else {
@@ -90,9 +90,32 @@ object Sync {
             Bridge.Usage.Unauthorized -> store.lastError = Store.ERROR_UNPAIRED
             is Bridge.Usage.Failed -> failed(store)
         }
+        // Every account of both families, for the orbit: two small requests
+        // that usually answer 304, on the same base that just worked.
+        if (store.lastError == null) for (f in PoolFamily.entries) {
+            when (val p = Bridge.pool(base, token, store.poolEtag(f).takeIf { store.poolJson(f) != null }, f)) {
+                is Bridge.Usage.Fresh -> store.setPool(f, p.body, p.etag, now)
+                Bridge.Usage.NotModified -> store.setPool(f, null, store.poolEtag(f), now)
+                // A bridge older than /pool: the same members from each account's /usage.
+                is Bridge.Usage.Failed -> if (p.reason == "HTTP 404") poolFromUsage(base, token, f)?.let { store.setPool(f, it, null, now) }
+                else -> Unit // keep the last answer; it dims as it ages
+            }
+        }
         // A threshold crossing always moves the numbers, so an unchanged
         // ETag means no new events: skip the second request.
         if (store.lastError == null && (store.etag == null || store.etag != store.eventsEtag)) pollEvents(ctx, store, base, token)
+    }
+
+    /** `/pool`'s members, built from each of the family's providers' `/usage`; null if none answered. */
+    private fun poolFromUsage(base: String, token: String, f: PoolFamily): String? {
+        val members = org.json.JSONArray()
+        for (p in UsageProvider.entries.filter { it.family == f }) {
+            val r = Bridge.usage(base, token, null, p) as? Bridge.Usage.Fresh ?: continue
+            val o = runCatching { org.json.JSONObject(r.body) }.getOrNull() ?: continue
+            if (o.optString("source_error").isNotBlank()) continue
+            members.put(org.json.JSONObject().put("provider", p.wire).put("five_hour", o.opt("five_hour")).put("seven_day", o.opt("seven_day")))
+        }
+        return if (members.length() == 0) null else org.json.JSONObject().put("family", f.wire).put("members", members).toString()
     }
 
     private fun ok(store: Store, now: Long) {
@@ -158,7 +181,7 @@ object Surfaces {
     // context refuses (ReceiverCallNotAllowedException): use the app context.
     fun refresh(context: Context) {
         val ctx = context.applicationContext
-        TileService.getUpdater(ctx).requestUpdate(UsageTileService::class.java)
+        TileService.getUpdater(ctx).requestUpdate(OrbitTileService::class.java)
         for (service in listOf(UsageComplicationService::class.java, ResetComplicationService::class.java)) {
             ComplicationDataSourceUpdateRequester.create(ctx, ComponentName(ctx, service)).requestUpdateAll()
         }
